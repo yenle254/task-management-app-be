@@ -1,0 +1,6 @@
+node_modules/
+.env
+PERSON_1_CHECKLIST.md
+# .DS_Store
+# /uploads/*
+# !/uploads/.gitkeep
