@@ -37,19 +37,21 @@ const UserSchema = new mongoose.Schema(
       type: String,
       enum: ["hr_manager", "team_lead", "employee"],
       default: "employee",
+      index: true,
     },
     profile: { type: ProfileSchema, required: true },
     teamId: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "Team",
       default: null,
+      index: true,
     },
     managerId: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "User",
       default: null,
     },
-    isActive: { type: Boolean, default: true },
+    isActive: { type: Boolean, default: true, index: true },
     leaveBalance: {
       type: Map,
       of: {
@@ -61,7 +63,15 @@ const UserSchema = new mongoose.Schema(
     },
     resetPassword: { type: ResetPasswordSchema, default: {} },
   },
-  { timestamps: true, collection: "users" }
+  {
+    timestamps: true,
+    collection: "users",
+    indexes: [
+        { role: 1, isActive: 1 },           // getAvailableLeaders
+        { role: 1, teamId: 1 },            // Find team lead of team
+        { teamId: 1, isActive: 1 }          // getUsersByTeam
+    ]
+  }
 );
 
 module.exports = mongoose.model("User", UserSchema);

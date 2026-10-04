@@ -23,20 +23,30 @@ const SubTaskSchema = new mongoose.Schema({
 const TaskSchema = new mongoose.Schema({
     title: { type: String, required: true, trim: true },
     description: { type: String, default: '' },
-    status: { type: String, enum: ['todo', 'in_progress', 'done', 'deleted'], default: 'todo' },
+    status: { type: String, enum: ['todo', 'in_progress', 'done', 'deleted'], default: 'todo', index: true },
     priority: { type: String, enum: ['low', 'medium', 'high'], default: 'medium' },
     difficulty: { type: String, enum: ['easy', 'medium', 'hard'], default: 'medium' },
-    assignedTo: [{ type: mongoose.Schema.Types.ObjectId, ref: 'User' }],
-    assignedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
-    teamId: { type: mongoose.Schema.Types.ObjectId, ref: 'Team', required: true },
+    assignedTo: [{ type: mongoose.Schema.Types.ObjectId, ref: 'User', index: true }],
+    assignedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true, index: true },
+    teamId: { type: mongoose.Schema.Types.ObjectId, ref: 'Team', required: true, index: true },
     startDate: { type: Date, },
-    dueDate: { type: Date, },
+    dueDate: { type: Date, index: true },
     progress: { type: Number, min: 0, max: 100, default: 0 },
     attachments: [AttachmentSchema],
     comments: [CommentSchema],
     subTasks: [SubTaskSchema],
     tags: [String],
-}, { timestamps: true, collection: 'tasks' });
+}, {
+    timestamps: true,
+    collection: 'tasks',
+    // Composite indexes for common query patterns
+    indexes: [
+        { assignedTo: 1, status: 1 },                    // getMyTasks
+        { teamId: 1, status: 1 },                      // getTeamTasks
+        { status: 1, dueDate: 1 },                     // overdue tasks
+        { assignedTo: 1, status: 1, dueDate: 1 }       // overdue + user filter
+    ]
+});
 
 
 TaskSchema.pre('save', function(next) {
