@@ -10,6 +10,12 @@ const {
     getConversationByUser
 } = require('../controllers/messageController');
 const { protect } = require('../middleware/auth');
+const { validateRequest } = require('../middleware/validateRequest');
+const {
+  sendMessageValidation,
+  getMessagesValidation,
+  getConversationByUserValidation
+} = require('../validators');
 
 router.use(protect);
 
@@ -20,21 +26,19 @@ router.get('/unread/count', getUnreadCount);
 router.get('/conversations', getConversations);
 
 // Get conversation by user ID
-router.get('/conversation/user/:userId', getConversationByUser);
+router.get('/conversation/user/:userId', getConversationByUserValidation, validateRequest, getConversationByUser);
 
 // Get messages in conversation
-router.get('/conversation/:conversationId', getMessages);
+router.get('/conversation/:conversationId', getMessagesValidation, validateRequest, getMessages);
 
 // Send message
-router.post('/', sendMessage);
+router.post('/', sendMessageValidation, validateRequest, sendMessage);
 
 // Mark messages as read
 router.put('/:conversationId/read', markAsRead);
 
 // Delete message
 router.delete('/:id', deleteMessage);
-
-
 
 module.exports = router;
 

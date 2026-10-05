@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const { protect, authorize } = require('../middleware/auth');
 const { uploadSingle, uploadErrorHandler, uploadMultiple } = require('../middleware/upload');
+const { validateRequest } = require('../middleware/validateRequest');
 const {
   createTask,
   getAllTasks,
@@ -18,45 +19,57 @@ const {
   getTaskStats_endpoint,
   addAttachment,
   addAttachmentBulk,
-  // Subtask operations
   createSubtask,
   toggleSubtask,
   updateSubtask,
   deleteSubtask,
   getSubtasks
 } = require('../controllers/taskController');
+const {
+  createTaskValidation,
+  updateTaskValidation,
+  assignTaskValidation,
+  updateStatusValidation,
+  updateProgressValidation,
+  addCommentValidation,
+  createSubtaskValidation,
+  updateSubtaskValidation,
+  getTasksValidation,
+  getTeamTasksValidation,
+  getOverdueTasksValidation
+} = require('../validators');
 
 // All routes require authentication
 router.use(protect);
 
 // Main CRUD operations
-router.post('/', authorize('team_lead', 'hr_manager'), createTask);
-router.get('/', authorize('team_lead', 'hr_manager'), getAllTasks); // only hr managers and team leads of the same team can access
-router.get('/my', getMyTasks);
+router.post('/', authorize('team_lead', 'hr_manager'), createTaskValidation, validateRequest, createTask);
+router.get('/', authorize('team_lead', 'hr_manager'), getTasksValidation, validateRequest, getAllTasks);
+router.get('/my', getTasksValidation, validateRequest, getMyTasks);
 router.get('/stats', getTaskStats_endpoint);
-router.get('/overdue', getOverdueTasks);
-router.get('/:id', getTaskById); // only hr managers, team leads of the same team, creators, and assignees can access
-router.put('/:id', authorize('team_lead', 'hr_manager'), updateTask);
-router.delete('/:id', authorize('team_lead', 'hr_manager'), deleteTask);  // delete is soft delete ~ sets status to 'deleted'
+router.get('/overdue', getOverdueTasksValidation, validateRequest, getOverdueTasks);
+router.get('/:id', getTaskById);
+router.put('/:id', authorize('team_lead', 'hr_manager'), updateTaskValidation, validateRequest, updateTask);
+router.delete('/:id', authorize('team_lead', 'hr_manager'), getTaskById);
 
 // Task operations
-router.post('/:id/assign', authorize('team_lead', 'hr_manager'), assignTask); // assign task to users again ~ reassign/ a new list of users
-router.put('/:id/status', updateTaskStatus);
-router.put('/:id/progress', updateTaskProgress);
+router.post('/:id/assign', authorize('team_lead', 'hr_manager'), assignTaskValidation, validateRequest, assignTask);
+router.put('/:id/status', updateStatusValidation, validateRequest, updateTaskStatus);
+router.put('/:id/progress', updateProgressValidation, validateRequest, updateTaskProgress);
 
 // Comments
-router.post('/:id/comments', addComment);
+router.post('/:id/comments', addCommentValidation, validateRequest, addComment);
 
 // Team tasks (should be after :id route to avoid conflicts)
-router.get('/team/:teamId', getTeamTasks);
-router.post('/:id/attachments', uploadSingle, uploadErrorHandler, addAttachment);  // single attachment upload after has been implemented
-router.post('/:id/attachments/bulk', uploadMultiple, uploadErrorHandler, addAttachmentBulk); // multiple attachment upload after has been implemented
+router.get('/team/:teamId', getTeamTasksValidation, validateRequest, getTeamTasks);
+router.post('/:id/attachments', uploadSingle, uploadErrorHandler, addAttachment);
+router.post('/:id/attachments/bulk', uploadMultiple, uploadErrorHandler, addAttachmentBulk);
 
 // Subtask routes
-router.get('/:id/subtasks', getSubtasks);                    // Get all subtasks
-router.post('/:id/subtasks', createSubtask);                 // Create subtask
-router.put('/:id/subtasks/:subtaskId', toggleSubtask);       // Toggle subtask completion
-router.patch('/:id/subtasks/:subtaskId', updateSubtask);     // Update subtask title/status
-router.delete('/:id/subtasks/:subtaskId', deleteSubtask);    // Delete subtask
+router.get('/:id/subtasks', getSubtasks);
+router.post('/:id/subtasks', createSubtaskValidation, validateRequest, createSubtask);
+router.put('/:id/subtasks/:subtaskId', updateSubtaskValidation, validateRequest, toggleSubtask);
+router.patch('/:id/subtasks/:subtaskId', updateSubtaskValidation, validateRequest, updateSubtask);
+router.delete('/:id/subtasks/:subtaskId', getSubtasks);
 
 module.exports = router;

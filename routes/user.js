@@ -8,13 +8,20 @@ const {
   getUsersByTeam,
 } = require("../controllers/userController");
 const { protect, authorize } = require("../middleware/auth");
+const { validateRequest } = require("../middleware/validateRequest");
 const { USER_ROLES } = require("../utils/constants");
+const {
+  getUsersValidation,
+  getUserByIdValidation,
+  updateUserValidation,
+  getUsersByTeamValidation
+} = require("../validators");
 
-router.get("/", protect, authorize(USER_ROLES.HR_MANAGER), getAllUsers);
-router.get("/messaging/contacts", protect, getAllUsers); // For messaging - all authenticated users
-router.get("/:id", protect, getUserById);
-router.put("/:id", protect, authorize(USER_ROLES.HR_MANAGER), updateUser);
-router.delete("/:id", protect, authorize(USER_ROLES.HR_MANAGER), deleteUser);
-router.get("/team/:teamId", protect, getUsersByTeam);
+router.get("/", protect, authorize(USER_ROLES.HR_MANAGER), getUsersValidation, validateRequest, getAllUsers);
+router.get("/messaging/contacts", protect, getAllUsers);
+router.get("/:id", protect, getUserByIdValidation, validateRequest, getUserById);
+router.put("/:id", protect, authorize(USER_ROLES.HR_MANAGER), updateUserValidation, validateRequest, updateUser);
+router.delete("/:id", protect, authorize(USER_ROLES.HR_MANAGER), getUserByIdValidation, validateRequest, deleteUser);
+router.get("/team/:teamId", protect, getUsersByTeamValidation, validateRequest, getUsersByTeam);
 
 module.exports = router;

@@ -37,11 +37,12 @@ HR Management System backend API viết bằng Node.js + Express + MongoDB, hỗ
 server/
 ├── config/           # Configuration (database, jwt)
 ├── controllers/      # Request handlers (routes → controller → response)
-├── middleware/       # Auth, error handling, file upload
+├── middleware/       # Auth, error handling, file upload, validation
 ├── models/          # Mongoose schemas
 ├── routes/          # Express route definitions
 ├── services/        # Business logic layer
 ├── utils/           # Helper functions, constants
+├── validators/      # Input validation rules (express-validator)
 ├── migrations/      # Database migrations & index definitions
 ├── uploads/         # Uploaded files (gitignored)
 ├── server.js        # Application entry point
@@ -155,6 +156,16 @@ const getUser = async (req, res) => {
 404 - Not Found
 429 - Too Many Requests (rate limit)
 500 - Internal Server Error
+
+// Validation errors (format từ validateRequest middleware)
+{
+  success: false,
+  error: 'Validation failed',
+  errors: [
+    { field: 'email', message: 'Invalid email format' },
+    { field: 'password', message: 'Password must be at least 6 characters' }
+  ]
+}
 ```
 
 ### Async/Await Patterns
@@ -216,6 +227,47 @@ node migrations/001_add_performance_indexes.js status
 # Rollback
 node migrations/001_add_performance_indexes.js down
 ```
+
+---
+
+## Input Validation
+
+Xem chi tiết: [VALIDATION_DOCUMENTATION.md](VALIDATION_DOCUMENTATION.md)
+
+### Validation Pattern
+
+```javascript
+// 1. Import validators
+const { registerValidation } = require('../validators');
+const { validateRequest } = require('../middleware/validateRequest');
+
+// 2. Add to route
+router.post('/register', registerValidation, validateRequest, register);
+```
+
+### Error Response Format
+
+```json
+{
+  "success": false,
+  "error": "Validation failed",
+  "errors": [
+    { "field": "email", "message": "Invalid email format" }
+  ]
+}
+```
+
+### Validation Files
+
+| File | Mô tả |
+|------|--------|
+| `validators/auth.validators.js` | Auth validation rules |
+| `validators/user.validators.js` | User validation rules |
+| `validators/task.validators.js` | Task validation rules |
+| `validators/leave.validators.js` | Leave validation rules |
+| `validators/attendance.validators.js` | Attendance validation rules |
+| `validators/notification.validators.js` | Notification validation rules |
+| `validators/message.validators.js` | Message validation rules |
 
 ---
 
@@ -437,7 +489,7 @@ socket.on('user_typing', (data) => { ... });
 
 ### High Priority
 - [ ] Add unit tests (Jest)
-- [ ] Add input validation middleware (express-validator)
+- [x] Add input validation middleware (express-validator) ✅ DONE
 - [ ] Add rate limiting
 - [ ] Create API documentation (Swagger)
 
