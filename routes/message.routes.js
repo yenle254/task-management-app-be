@@ -8,9 +8,9 @@ const {
     deleteMessage,
     getUnreadCount,
     getConversationByUser
-} = require('../controllers/messageController');
-const { protect } = require('../middleware/auth');
-const { validateRequest } = require('../middleware/validateRequest');
+} = require('../controllers/message.controller');
+const { protect } = require('../middleware/auth.middleware');
+const { validateRequest } = require('../middleware/validate-request.middleware');
 const {
   sendMessageValidation,
   getMessagesValidation,

@@ -1,5 +1,5 @@
-const User = require('../models/User');
-const Attendance = require('../models/Attendance');
+const User = require('../models/user.model');
+const Attendance = require('../models/attendance.model');
 
 
 /**

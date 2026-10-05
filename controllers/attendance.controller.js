@@ -1,6 +1,6 @@
-const Attendance = require('../models/Attendance');
-const attendanceService = require('../services/attendanceServices');
-const User = require('../models/User');
+const Attendance = require('../models/attendance.model');
+const attendanceService = require('../services/attendance.service');
+const User = require('../models/user.model');
 
 
 /**

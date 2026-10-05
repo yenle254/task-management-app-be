@@ -1,7 +1,7 @@
 const express = require('express');
 const router = express.Router();
-const { protect } = require('../middleware/auth');
-const { validateRequest } = require('../middleware/validateRequest');
+const { protect } = require('../middleware/auth.middleware');
+const { validateRequest } = require('../middleware/validate-request.middleware');
 const {
   getMyNotifications,
   markNotificationAsRead,
@@ -10,7 +10,7 @@ const {
   deleteAllNotifications_endpoint,
   getUnreadNotificationCount,
   getNotificationsByType
-} = require('../controllers/notificationController');
+} = require('../controllers/notification.controller');
 const {
   getNotificationsValidation,
   getNotificationsByTypeValidation,

@@ -1,6 +1,6 @@
-const Message = require('../models/Message');
-const Conversation = require('../models/Conversation');
-const User = require('../models/User');
+const Message = require('../models/message.model');
+const Conversation = require('../models/conversation.model');
+const User = require('../models/user.model');
 
 /**
  * @desc    Send a message

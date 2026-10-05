@@ -36,17 +36,33 @@ HR Management System backend API viết bằng Node.js + Express + MongoDB, hỗ
 ```
 server/
 ├── config/           # Configuration (database, jwt)
-├── controllers/      # Request handlers (routes → controller → response)
-├── middleware/       # Auth, error handling, file upload, validation
-├── models/          # Mongoose schemas
-├── routes/          # Express route definitions
-├── services/        # Business logic layer
-├── utils/           # Helper functions, constants
-├── validators/      # Input validation rules (express-validator)
-├── migrations/      # Database migrations & index definitions
-├── uploads/         # Uploaded files (gitignored)
-├── server.js        # Application entry point
-└── .env             # Environment variables
+│   ├── database.js
+│   └── jwt.js
+├── controllers/      # Request handlers
+│   └── [module].controller.js
+├── middleware/        # Auth, error handling, file upload, validation
+│   ├── auth.middleware.js
+│   ├── error-handler.middleware.js
+│   ├── upload.middleware.js
+│   └── validate-request.middleware.js
+├── models/           # Mongoose schemas
+│   └── [module].model.js
+├── routes/           # Express route definitions
+│   └── [module].routes.js
+├── services/         # Business logic layer
+│   └── [module].service.js
+├── utils/            # Helper functions
+│   ├── constants.utils.js
+│   ├── date.helper.js
+│   └── [module].helper.js
+├── validators/       # Input validation rules
+│   └── [module].validators.js
+├── migrations/       # Database migrations & indexes
+├── models/
+│   └── indexes.js    # Index management utilities
+├── uploads/          # Uploaded files (gitignored)
+├── server.js         # Application entry point
+└── .env              # Environment variables
 ```
 
 ### Request Flow

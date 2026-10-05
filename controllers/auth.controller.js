@@ -1,13 +1,13 @@
-const User = require("../models/User");
-const Team = require("../models/Team");
-const { hashPassword, comparePassword } = require("../services/authService");
+const User = require("../models/user.model");
+const Team = require("../models/team.model");
+const { hashPassword, comparePassword } = require("../services/auth.service");
 const { sendTokenResponse } = require("../config/jwt");
-const { sendResetPasswordEmail } = require("../services/emailService");
+const { sendResetPasswordEmail } = require("../services/email.service");
 const {
   generateOTP,
   isOTPExpired,
   getOTPExpireTime,
-} = require("../utils/otpHelper");
+} = require("../utils/otp.helper");
 
 /**
  * @desc    Register user & get token

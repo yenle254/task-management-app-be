@@ -12,9 +12,9 @@ const {
   getTeamMembers,
   getAllMembers,
   getAvailableLeaders
-} = require("../controllers/teamController");
-const { protect, authorize } = require("../middleware/auth");
-const { USER_ROLES } = require("../utils/constants");
+} = require("../controllers/team.controller");
+const { protect, authorize } = require("../middleware/auth.middleware");
+const { USER_ROLES } = require("../utils/constants.utils");
 
 // IMPORTANT: Specific routes MUST come before parameterized routes
 // Place /members before /:id to avoid route conflicts

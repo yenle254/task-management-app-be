@@ -1,11 +1,11 @@
-const Leave = require('../models/Leave');
-const User = require('../models/User');
-const leaveService = require('../services/leaveService');
-const { 
-  notifyLeaveApproved, 
+const Leave = require('../models/leave.model');
+const User = require('../models/user.model');
+const leaveService = require('../services/leave.service');
+const {
+  notifyLeaveApproved,
   notifyLeaveRejected,
-  notifyPendingLeave 
-} = require('../services/notificationService');
+  notifyPendingLeave
+} = require('../services/notification.service');
 
 /**
  * @desc    Submit leave request

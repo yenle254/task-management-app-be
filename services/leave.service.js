@@ -1,5 +1,5 @@
-const Leave = require('../models/Leave');
-const User = require('../models/User');
+const Leave = require('../models/leave.model');
+const User = require('../models/user.model');
 const { differenceInCalendarDays, isBefore, isAfter, startOfDay, isFuture, isPast } = require('date-fns');
 
 /**

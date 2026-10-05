@@ -1,8 +1,8 @@
-const User = require("../models/User");
-const Task = require("../models/Task");
-const Attendance = require("../models/Attendance");
-const Leave = require("../models/Leave");
-const Team = require("../models/Team");
+const User = require("../models/user.model");
+const Task = require("../models/task.model");
+const Attendance = require("../models/attendance.model");
+const Leave = require("../models/leave.model");
+const Team = require("../models/team.model");
 
 // Overview statistics
 const getOverviewStats = async (req, res) => {

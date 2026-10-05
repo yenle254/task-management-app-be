@@ -4,7 +4,7 @@
  */
 
 const { body, param, validationResult } = require('express-validator');
-const User = require('../models/User');
+const User = require('../models/user.model');
 
 /**
  * Validation chain for user registration

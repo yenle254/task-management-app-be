@@ -1,6 +1,6 @@
-const Task = require('../models/Task');
-const Team = require('../models/Team');
-const User = require('../models/User');
+const Task = require('../models/task.model');
+const Team = require('../models/team.model');
+const User = require('../models/user.model');
 const {
   canUserAccessTask,
   canCreateOrAssignTask,
@@ -9,14 +9,14 @@ const {
   checkIfOverdue,
   calculateProgress,
   getTaskStats
-} = require('../services/taskService');
+} = require('../services/task.service');
 const {
   notifyTaskAssigned,
   notifyTaskUpdated,
   notifyTaskCompleted,
   notifyCommentAdded
-} = require('../services/notificationService');
-const { getFileUrl, deleteFile, getOriginalFilename } = require('../middleware/upload');
+} = require('../services/notification.service');
+const { getFileUrl, deleteFile, getOriginalFilename } = require('../middleware/upload.middleware');
 
 
 /**

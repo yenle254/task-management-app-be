@@ -1,6 +1,6 @@
-const Team = require("../models/Team");
-const User = require("../models/User");
-const userService = require("../services/userService");
+const Team = require("../models/team.model");
+const User = require("../models/user.model");
+const userService = require("../services/user.service");
 
 /**
  * @desc    Get all users

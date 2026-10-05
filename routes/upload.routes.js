@@ -1,7 +1,7 @@
 const express = require('express');
 const router = express.Router();
-const { uploadFile, uploadErrorHandler, getFileUrl } = require('../middleware/upload');
-const { protect } = require('../middleware/auth');
+const { uploadFile, uploadErrorHandler, getFileUrl } = require('../middleware/upload.middleware');
+const { protect } = require('../middleware/auth.middleware');
 
 /**
  * @desc    Upload a single file

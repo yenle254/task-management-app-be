@@ -1,11 +1,11 @@
-const Notification = require('../models/Notification');
+const Notification = require('../models/notification.model');
 const {
   markAsRead,
   markAllAsRead,
   getUnreadCount,
   deleteNotification,
   deleteAllNotifications
-} = require('../services/notificationService');
+} = require('../services/notification.service');
 
 /**
  * @desc    Get all notifications for current user

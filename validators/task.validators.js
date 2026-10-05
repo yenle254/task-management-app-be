@@ -5,9 +5,9 @@
 
 const { body, param, query } = require('express-validator');
 const mongoose = require('mongoose');
-const Task = require('../models/Task');
-const Team = require('../models/Team');
-const User = require('../models/User');
+const Task = require('../models/task.model');
+const Team = require('../models/team.model');
+const User = require('../models/user.model');
 
 /**
  * Validation chain for creating a task

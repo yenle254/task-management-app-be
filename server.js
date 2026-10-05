@@ -4,7 +4,7 @@ const { Server } = require("socket.io");
 const dotenv = require("dotenv");
 const cors = require("cors");
 const connectDB = require("./config/database");
-const errorHandler = require("./middleware/errorHandler");
+const errorHandler = require("./middleware/error-handler.middleware");
 
 dotenv.config();
 const path = require("path");
@@ -58,16 +58,16 @@ app.get("/", (req, res) => {
 });
 
 // Import routes
-const authRoutes = require("./routes/auth");
-const userRoutes = require("./routes/user");
-const teamRoutes = require("./routes/team");
-const taskRoutes = require("./routes/task");
-const leaveRoutes = require("./routes/leave");
-const attendanceRoutes = require("./routes/attendance");
-const notificationRoutes = require("./routes/notification");
-const messageRoutes = require("./routes/message");
-const uploadRoutes = require("./routes/upload");
-const statisticsRoutes = require("./routes/statistics");
+const authRoutes = require("./routes/auth.routes");
+const userRoutes = require("./routes/user.routes");
+const teamRoutes = require("./routes/team.routes");
+const taskRoutes = require("./routes/task.routes");
+const leaveRoutes = require("./routes/leave.routes");
+const attendanceRoutes = require("./routes/attendance.routes");
+const notificationRoutes = require("./routes/notification.routes");
+const messageRoutes = require("./routes/message.routes");
+const uploadRoutes = require("./routes/upload.routes");
+const statisticsRoutes = require("./routes/statistics.routes");
 
 // Mount routes
 app.use("/api/auth", authRoutes);
@@ -91,7 +91,7 @@ app.use((req, res, next) => {
 
 app.use(errorHandler);
 
-const socketHandler = require("./utils/socketHandler");
+const socketHandler = require("./utils/socket-handler.utils");
 socketHandler(io);
 
 const PORT = process.env.PORT;

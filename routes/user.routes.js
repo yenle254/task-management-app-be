@@ -6,10 +6,10 @@ const {
   updateUser,
   deleteUser,
   getUsersByTeam,
-} = require("../controllers/userController");
-const { protect, authorize } = require("../middleware/auth");
-const { validateRequest } = require("../middleware/validateRequest");
-const { USER_ROLES } = require("../utils/constants");
+} = require("../controllers/user.controller");
+const { protect, authorize } = require("../middleware/auth.middleware");
+const { validateRequest } = require("../middleware/validate-request.middleware");
+const { USER_ROLES } = require("../utils/constants.utils");
 const {
   getUsersValidation,
   getUserByIdValidation,

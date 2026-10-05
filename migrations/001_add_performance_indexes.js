@@ -10,14 +10,14 @@
 const mongoose = require('mongoose');
 
 // Load models
-const User = require('../models/User');
-const Task = require('../models/Task');
-const Team = require('../models/Team');
-const Attendance = require('../models/Attendance');
-const Leave = require('../models/Leave');
-const Notification = require('../models/Notification');
-const Conversation = require('../models/Conversation');
-const Message = require('../models/Message');
+const User = require('../models/user.model');
+const Task = require('../models/task.model');
+const Team = require('../models/team.model');
+const Attendance = require('../models/attendance.model');
+const Leave = require('../models/leave.model');
+const Notification = require('../models/notification.model');
+const Conversation = require('../models/conversation.model');
+const Message = require('../models/message.model');
 
 const MIGRATION_NAME = '001_add_performance_indexes';
 

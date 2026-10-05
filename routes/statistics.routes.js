@@ -1,7 +1,7 @@
 const express = require("express");
 const router = express.Router();
-const { protect, authorize } = require("../middleware/auth");
-const { USER_ROLES } = require("../utils/constants");
+const { protect, authorize } = require("../middleware/auth.middleware");
+const { USER_ROLES } = require("../utils/constants.utils");
 const {
   getOverviewStats,
   getEmployeesByDepartment,
@@ -9,7 +9,7 @@ const {
   getLeaveStats,
   getTaskStats,
   getTeamPerformance,
-} = require("../controllers/statisticsController");
+} = require("../controllers/statistics.controller");
 
 router.use(protect);
 router.use(authorize(USER_ROLES.HR_MANAGER));

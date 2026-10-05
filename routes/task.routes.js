@@ -1,8 +1,8 @@
 const express = require('express');
 const router = express.Router();
-const { protect, authorize } = require('../middleware/auth');
-const { uploadSingle, uploadErrorHandler, uploadMultiple } = require('../middleware/upload');
-const { validateRequest } = require('../middleware/validateRequest');
+const { protect, authorize } = require('../middleware/auth.middleware');
+const { uploadSingle, uploadErrorHandler, uploadMultiple } = require('../middleware/upload.middleware');
+const { validateRequest } = require('../middleware/validate-request.middleware');
 const {
   createTask,
   getAllTasks,
@@ -24,7 +24,7 @@ const {
   updateSubtask,
   deleteSubtask,
   getSubtasks
-} = require('../controllers/taskController');
+} = require('../controllers/task.controller');
 const {
   createTaskValidation,
   updateTaskValidation,

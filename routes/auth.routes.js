@@ -10,9 +10,9 @@ const {
   getMe,
   updateProfile,
   changePassword,
-} = require("../controllers/authController");
-const { protect } = require("../middleware/auth");
-const { validateRequest } = require("../middleware/validateRequest");
+} = require("../controllers/auth.controller");
+const { protect } = require("../middleware/auth.middleware");
+const { validateRequest } = require("../middleware/validate-request.middleware");
 const {
   registerValidation,
   loginValidation,

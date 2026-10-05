@@ -1,4 +1,4 @@
-const teamService = require("../services/teamService");
+const teamService = require("../services/team.service");
 
 /**
  * * @desc    Create a new team

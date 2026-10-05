@@ -1,5 +1,5 @@
-const Notification = require('../models/Notification');
-const User = require('../models/User');
+const Notification = require('../models/notification.model');
+const User = require('../models/user.model');
 
 /**
  * Create a new notification
