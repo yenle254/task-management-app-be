@@ -246,6 +246,35 @@ node migrations/001_add_performance_indexes.js down
 
 ---
 
+## File Naming Convention (Kebab-case)
+
+### Đã áp dụng chuẩn kebab-case cho tất cả files:
+
+| Type | Pattern | Ví dụ |
+|------|---------|--------|
+| Models | `[module].model.js` | `user.model.js`, `task.model.js` |
+| Controllers | `[module].controller.js` | `auth.controller.js` |
+| Services | `[module].service.js` | `task.service.js` |
+| Routes | `[module].routes.js` | `task.routes.js` |
+| Middleware | `[purpose].middleware.js` | `auth.middleware.js` |
+| Validators | `[module].validators.js` | `task.validators.js` |
+| Utils | `[purpose].helper.js` | `date.helper.js` |
+| Config | `[purpose].config.js` | `database.config.js` |
+
+### Import paths phải khớp với tên file:
+
+```javascript
+// ✅ Đúng
+const User = require('../models/user.model');
+const taskService = require('../services/task.service');
+
+// ❌ Sai
+const User = require('../models/User');
+const taskService = require('../services/taskService');
+```
+
+---
+
 ## Input Validation
 
 Xem chi tiết: [VALIDATION_DOCUMENTATION.md](VALIDATION_DOCUMENTATION.md)
@@ -519,6 +548,11 @@ socket.on('user_typing', (data) => { ... });
 - [ ] Add README for frontend integration
 - [ ] Create Docker configuration
 - [ ] Setup CI/CD pipeline
+
+### Completed
+- [x] Apply kebab-case naming convention ✅ DONE
+- [x] Add database indexes for performance ✅ DONE
+- [x] Add input validation ✅ DONE
 
 ---
 
