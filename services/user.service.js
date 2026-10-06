@@ -1,4 +1,4 @@
-const User = require("../models/User");
+const User = require("../models/user.model");
 
 /**
  * Get all users with pagination and filters

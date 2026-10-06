@@ -11,14 +11,14 @@
  *   await createAllIndexes();
  */
 
-const Task = require('./Task');
-const User = require('./User');
-const Team = require('./Team');
-const Attendance = require('./Attendance');
-const Leave = require('./Leave');
-const Notification = require('./Notification');
-const Conversation = require('./Conversation');
-const Message = require('./Message');
+const Task = require('./task.model');
+const User = require('./user.model');
+const Team = require('./team.model');
+const Attendance = require('./attendance.model');
+const Leave = require('./leave.model');
+const Notification = require('./notification.model');
+const Conversation = require('./conversation.model');
+const Message = require('./message.model');
 
 /**
  * Create all recommended indexes
