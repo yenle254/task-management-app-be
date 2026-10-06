@@ -7,7 +7,12 @@
     "start": "node server.js",
     "dev": "nodemon server.js",
     "seed": "node seed.js",
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "jest",
+    "test:watch": "jest --watch",
+    "test:coverage": "jest --coverage",
+    "test:unit": "jest tests/unit",
+    "test:integration": "jest tests/integration",
+    "test:clear": "jest --clearCache"
   },
   "keywords": [
     "hr",
@@ -37,6 +42,13 @@
   },
   "devDependencies": {
     "@playwright/test": "^1.63.0",
-    "nodemon": "^3.0.1"
+    "@types/faker": "^6.6.8",
+    "@types/jest": "^30.0.0",
+    "@types/supertest": "^7.2.1",
+    "faker": "^6.6.6",
+    "jest": "^30.5.2",
+    "jest-extended": "^7.0.0",
+    "nodemon": "^3.0.1",
+    "supertest": "^7.3.1"
   }
 }
