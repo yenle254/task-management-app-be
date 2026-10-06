@@ -316,6 +316,72 @@ router.post('/register', registerValidation, validateRequest, register);
 
 ---
 
+## Testing
+
+### Test Setup
+
+Jest đã được setup với các dependencies:
+- `jest` - Test runner
+- `supertest` - HTTP testing
+- `faker` - Fake data generation
+- `jest-extended` - Extra matchers
+
+### Test Scripts
+
+```bash
+# Run all tests
+npm test
+
+# Run tests in watch mode
+npm run test:watch
+
+# Run tests with coverage
+npm run test:coverage
+
+# Run only unit tests
+npm run test:unit
+
+# Run only integration tests
+npm run test:integration
+
+# Clear Jest cache
+npm run test:clear
+```
+
+### Test Structure
+
+```
+tests/
+├── setup.js                    # Global setup
+├── fixtures/                   # Test data fixtures
+│   ├── users.fixture.js
+│   ├── tasks.fixture.js
+│   ├── leaves.fixture.js
+│   └── attendance.fixture.js
+├── mocks/                      # Shared mocks
+│   ├── mongoose.mock.js
+│   └── jwt.mock.js
+├── unit/
+│   ├── services/
+│   │   ├── auth.service.test.js
+│   │   ├── task.service.test.js
+│   │   └── leave.service.test.js
+│   └── utils/
+│       └── date.helper.test.js
+└── integration/                # (future)
+    └── routes/
+```
+
+### Coverage Report
+
+```
+All files:     74.39% statements, 67.7% branches
+Services:      76.36% statements
+Utils:        100% statements
+```
+
+---
+
 ## Scripts & Commands
 
 ### Development
@@ -533,7 +599,7 @@ socket.on('user_typing', (data) => { ... });
 ## TODO / Technical Debt
 
 ### High Priority
-- [ ] Add unit tests (Jest)
+- [x] Add unit tests (Jest) ✅ DONE - 91 tests passing
 - [x] Add input validation middleware (express-validator) ✅ DONE
 - [ ] Add rate limiting
 - [ ] Create API documentation (Swagger)
@@ -553,6 +619,7 @@ socket.on('user_typing', (data) => { ... });
 - [x] Apply kebab-case naming convention ✅ DONE
 - [x] Add database indexes for performance ✅ DONE
 - [x] Add input validation ✅ DONE
+- [x] Setup Jest testing framework ✅ DONE
 
 ---
 
