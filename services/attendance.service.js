@@ -1,5 +1,6 @@
 const User = require('../models/user.model');
 const Attendance = require('../models/attendance.model');
+const { validateLocation: validateOfficeLocation } = require('./office.service');
 
 
 /**
@@ -160,25 +161,13 @@ const autoClockOutIfNeeded = (record) => {
 }
 
 /**
- * Validate if location is within allowed area
+ * Validate if location is within allowed area (from office service)
  * @param {Number} lat
  * @param {Number} lng
  * @returns {Boolean}
  **/
-const validateLocation = (lat, lng) => {
-    // 10.871556, 106.803221 // cb
-    // 10.869093, 106.803103 // cn
-    // 10.869935, 106.805138 // cd
-    // 10.869913, 106.802012 // ct
-    const allowedArea = {
-        latMin: 10.869093,
-        latMax: 10.871556,
-        lngMin: 106.802012,
-        lngMax: 106.805138
-    };
-
-    return lat >= allowedArea.latMin && lat <= allowedArea.latMax &&
-           lng >= allowedArea.lngMin && lng <= allowedArea.lngMax;
+const validateLocation = async (lat, lng) => {
+    return await validateOfficeLocation(lat, lng);
 }
 
 module.exports = {
@@ -186,8 +175,8 @@ module.exports = {
     determineStatus,
     getTodayAttendance,
     getAttendanceStats,
-    validateLocation,
     isWorkingDay,
     getWorkingDays,
-    autoClockOutIfNeeded
+    autoClockOutIfNeeded,
+    validateLocation
 };

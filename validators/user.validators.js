@@ -120,9 +120,13 @@ const updateUserValidation = [
     .isLength({ max: 100 }).withMessage('Position must be at most 100 characters'),
 
   body('profile.phone')
-    .optional()
+    .optional({ nullable: true, checkFalsy: true })
     .trim()
-    .matches(/^[0-9+\-\s()]{6,20}$/).withMessage('Invalid phone number format')
+    .matches(/^[0-9+\-\s()]{6,20}$/).withMessage('Invalid phone number format'),
+
+  body('profile.avatar')
+    .optional({ nullable: true, checkFalsy: true })
+    .trim(),
 ];
 
 /**

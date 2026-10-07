@@ -28,11 +28,11 @@ const clockIn = async (req, res) => {
             });
         }
 
-        const validLocation = attendanceService.validateLocation(lat, lng);
+        const validLocation = await attendanceService.validateLocation(lat, lng);
         if (!validLocation) {
             return res.status(400).json({
                 success: false,
-                message: 'Clock-in location is outside the allowed area'
+                message: 'Clock-in location is outside the allowed office area'
             });
         }
 

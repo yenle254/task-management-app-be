@@ -53,6 +53,7 @@ app.get("/", (req, res) => {
       attendance: "/api/attendance",
       notifications: "/api/notifications",
       messages: "/api/messages",
+      offices: "/api/offices",
     },
   });
 });
@@ -68,6 +69,7 @@ const notificationRoutes = require("./routes/notification.routes");
 const messageRoutes = require("./routes/message.routes");
 const uploadRoutes = require("./routes/upload.routes");
 const statisticsRoutes = require("./routes/statistics.routes");
+const officeRoutes = require("./routes/office.routes");
 
 // Mount routes
 app.use("/api/auth", authRoutes);
@@ -79,6 +81,7 @@ app.use("/api/attendance", attendanceRoutes);
 app.use("/api/notifications", notificationRoutes);
 app.use("/api/messages", messageRoutes);
 app.use("/api/upload", uploadRoutes);
+app.use("/api/offices", officeRoutes);
 app.use("/uploads", express.static(path.join(__dirname, "uploads")));
 app.use("/api/statistics", statisticsRoutes);
 

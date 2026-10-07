@@ -148,22 +148,22 @@ const updateProfileValidation = [
     .isLength({ min: 3, max: 100 }).withMessage('Full name must be between 3 and 100 characters'),
 
   body('department')
-    .optional()
+    .optional({ nullable: true, checkFalsy: true })
     .trim()
     .isLength({ max: 100 }).withMessage('Department must be at most 100 characters'),
 
   body('position')
-    .optional()
+    .optional({ nullable: true, checkFalsy: true })
     .trim()
     .isLength({ max: 100 }).withMessage('Position must be at most 100 characters'),
 
   body('phone')
-    .optional()
+    .optional({ nullable: true, checkFalsy: true })
     .trim()
     .matches(/^[0-9+\-\s()]{6,20}$/).withMessage('Invalid phone number format'),
 
   body('avatar')
-    .optional()
+    .optional({ nullable: true, checkFalsy: true })
     .trim()
     .isURL().withMessage('Avatar must be a valid URL')
 ];
