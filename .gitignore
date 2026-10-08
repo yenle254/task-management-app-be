@@ -4,3 +4,17 @@ PERSON_1_CHECKLIST.md
 # .DS_Store
 # /uploads/*
 # !/uploads/.gitkeep
+
+# Documentation (generated locally)
+docs/
+
+# Test coverage reports (generated, not source code)
+coverage/
+
+# Logs
+*.log
+npm-debug.log*
+
+# OS files
+.DS_Store
+Thumbs.db
