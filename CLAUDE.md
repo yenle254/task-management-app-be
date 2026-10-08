@@ -611,7 +611,7 @@ socket.on('user_typing', (data) => { ... });
 ### High Priority
 - [x] Add unit tests (Jest) ✅ DONE - 91 tests passing
 - [x] Add input validation middleware (express-validator) ✅ DONE
-- [ ] Add rate limiting
+- [x] Add rate limiting ✅ DONE
 - [ ] Create API documentation (Swagger)
 
 ### Medium Priority
