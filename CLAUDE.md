@@ -493,10 +493,12 @@ CLOUDINARY_API_SECRET=your_api_secret
 - `DELETE /api/teams/:id/members/:userId` - Xóa thành viên
 
 ### Attendance
-- `POST /api/attendance/clock-in` - Check-in
+- `POST /api/attendance/clock-in` - Check-in (yêu cầu GPS trong office area)
 - `PUT /api/attendance/clock-out` - Check-out
 - `GET /api/attendance/my` - Lịch sử chấm công
 - `GET /api/attendance/stats` - Thống kê chấm công
+
+**Lưu ý:** Location validation sử dụng Haversine formula với bán kính từ Office settings.
 
 ### Leaves
 - `POST /api/leaves` - Tạo đơn nghỉ phép
@@ -628,6 +630,7 @@ socket.on('user_typing', (data) => { ... });
 - [x] Add database indexes for performance ✅ DONE
 - [x] Add input validation ✅ DONE
 - [x] Setup Jest testing framework ✅ DONE
+- [x] Office location management for attendance ✅ DONE
 
 ---
 
