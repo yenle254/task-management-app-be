@@ -7,6 +7,7 @@ PERSON_1_CHECKLIST.md
 
 # Documentation (generated locally)
 docs/
+*.md
 
 # Test coverage reports (generated, not source code)
 coverage/
@@ -18,4 +19,3 @@ npm-debug.log*
 # OS files
 .DS_Store
 Thumbs.db
-CLAUDE.md
