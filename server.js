@@ -5,6 +5,7 @@ const dotenv = require("dotenv");
 const cors = require("cors");
 const connectDB = require("./config/database");
 const errorHandler = require("./middleware/error-handler.middleware");
+const { generalLimiter } = require("./middleware/rate-limit.middleware");
 
 dotenv.config();
 const path = require("path");
@@ -71,19 +72,19 @@ const uploadRoutes = require("./routes/upload.routes");
 const statisticsRoutes = require("./routes/statistics.routes");
 const officeRoutes = require("./routes/office.routes");
 
-// Mount routes
+// Mount routes with general rate limiting (skip for /api/auth which uses strict limiter)
 app.use("/api/auth", authRoutes);
-app.use("/api/users", userRoutes);
-app.use("/api/teams", teamRoutes);
-app.use("/api/tasks", taskRoutes);
-app.use("/api/leaves", leaveRoutes);
-app.use("/api/attendance", attendanceRoutes);
-app.use("/api/notifications", notificationRoutes);
-app.use("/api/messages", messageRoutes);
+app.use("/api/users", generalLimiter, userRoutes);
+app.use("/api/teams", generalLimiter, teamRoutes);
+app.use("/api/tasks", generalLimiter, taskRoutes);
+app.use("/api/leaves", generalLimiter, leaveRoutes);
+app.use("/api/attendance", generalLimiter, attendanceRoutes);
+app.use("/api/notifications", generalLimiter, notificationRoutes);
+app.use("/api/messages", generalLimiter, messageRoutes);
 app.use("/api/upload", uploadRoutes);
-app.use("/api/offices", officeRoutes);
+app.use("/api/offices", generalLimiter, officeRoutes);
+app.use("/api/statistics", generalLimiter, statisticsRoutes);
 app.use("/uploads", express.static(path.join(__dirname, "uploads")));
-app.use("/api/statistics", statisticsRoutes);
 
 app.use((req, res, next) => {
   res.status(404).json({
