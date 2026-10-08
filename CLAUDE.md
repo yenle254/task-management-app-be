@@ -509,6 +509,14 @@ CLOUDINARY_API_SECRET=your_api_secret
 - Real-time chat qua Socket.IO
 - Events: `send_message`, `new_message`, `typing_start`, `typing_stop`
 
+### Offices
+- `GET /api/offices` - Danh sách offices
+- `GET /api/offices/active` - Office đang active
+- `POST /api/offices` - Tạo office mới (HR)
+- `PUT /api/offices/:id` - Cập nhật office (HR)
+- `PUT /api/offices/:id/activate` - Set office active (HR)
+- `DELETE /api/offices/:id` - Xóa office (HR)
+
 ---
 
 ## Development Workflow
