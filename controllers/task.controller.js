@@ -8,7 +8,9 @@ const {
   validateTaskData,
   checkIfOverdue,
   calculateProgress,
-  getTaskStats
+  getTaskStats,
+  enrichTask,
+  enrichTasks
 } = require('../services/task.service');
 const {
   notifyTaskAssigned,
@@ -170,11 +172,7 @@ const getAllTasks = async (req, res) => {
       .skip(skip)
       .limit(parseInt(limit));
 
-    const enrichedTasks = tasks.map(t => ({
-      ...t.toObject(),
-      overdue: checkIfOverdue(t),
-      progress: calculateProgress(t)
-    }));
+    const enrichedTasks = tasks.map(t => enrichTask(t, true));
 
     res.json({
       success: true,
@@ -222,11 +220,7 @@ const getTaskById = async (req, res) => {
 
     res.json({
       success: true,
-      data: {
-        ...task.toObject(),
-        overdue: checkIfOverdue(task),
-        progress: calculateProgress(task)
-      }
+      data: enrichTask(task, true)
     });
   } catch (error) {
     console.error('Get task by ID error:', error);
@@ -268,7 +262,7 @@ const updateTask = async (req, res) => {
 
     res.json({
       success: true,
-      data: { ...task.toObject(), progress: calculateProgress(task) }
+      data: enrichTask(task, false)
     });
   } catch (error) {
     console.error('Update task error:', error);
@@ -444,7 +438,7 @@ const updateTaskStatus = async (req, res) => {
     res.json({
       success: true,
       message: 'Task status updated',
-      data: { ...task.toObject(), progress: calculateProgress(task) }
+      data: enrichTask(task, false)
     });
   } catch (error) {
     console.error('Update task status error:', error);
@@ -493,7 +487,7 @@ const updateTaskProgress = async (req, res) => {
     res.json({
       success: true,
       message: 'Task progress updated',
-      data: { ...task.toObject(), progress: calculateProgress(task) }
+      data: enrichTask(task, false)
     });
   } catch (error) {
     console.error('Update task progress error:', error);
@@ -534,11 +528,7 @@ const getMyTasks = async (req, res) => {
       total,
       page: parseInt(page),
       pages: Math.ceil(total / limit),
-      data: tasks.map(t => ({
-        ...t.toObject(),
-        overdue: checkIfOverdue(t),
-        progress: calculateProgress(t)
-      }))
+      data: enrichTasks(tasks, true)
     });
   } catch (error) {
     console.error('Get my tasks error:', error);
@@ -583,11 +573,7 @@ const getTeamTasks = async (req, res) => {
       total,
       page: parseInt(page),
       pages: Math.ceil(total / limit),
-      data: tasks.map(t => ({
-        ...t.toObject(),
-        overdue: checkIfOverdue(t),
-        progress: calculateProgress(t)
-      }))
+      data: enrichTasks(tasks, true)
     });
   } catch (error) {
     console.error('Get team tasks error:', error);
@@ -674,11 +660,7 @@ const getOverdueTasks = async (req, res) => {
     res.json({
       success: true,
       count: tasks.length,
-      data: tasks.map(t => ({
-        ...t.toObject(),
-        overdue: true,
-        progress: calculateProgress(t)
-      }))
+      data: enrichTasks(tasks, true)
     });
   } catch (error) {
     console.error('Get overdue tasks error:', error);

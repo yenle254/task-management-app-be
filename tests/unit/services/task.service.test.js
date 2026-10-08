@@ -8,7 +8,9 @@ const {
   canUserAccessTask,
   canCreateOrAssignTask,
   canUpdateTaskStatus,
-  validateTaskData
+  validateTaskData,
+  enrichTask,
+  enrichTasks
 } = require('../../../services/task.service');
 
 describe('TaskService', () => {
@@ -364,6 +366,67 @@ describe('TaskService', () => {
       const result = validateTaskData(taskData);
 
       expect(result.valid).toBe(true);
+    });
+  });
+
+  describe('enrichTask()', () => {
+    it('should add overdue and progress to task object', () => {
+      const task = {
+        title: 'Test Task',
+        status: 'in_progress',
+        dueDate: new Date('2020-01-01'),
+        progress: 50
+      };
+
+      const result = enrichTask(task, true);
+
+      expect(result.title).toBe('Test Task');
+      expect(result.progress).toBe(50);
+      expect(result.overdue).toBe(true);
+    });
+
+    it('should work with Mongoose document', () => {
+      const doc = {
+        toObject: () => ({ title: 'Test', status: 'done', progress: 80 }),
+        title: 'Test',
+        status: 'done',
+        progress: 80
+      };
+
+      const result = enrichTask(doc, false);
+
+      expect(result.progress).toBe(80);
+      expect(result.overdue).toBeUndefined();
+    });
+
+    it('should not include overdue when includeOverdue is false', () => {
+      const task = { status: 'todo', progress: 0 };
+
+      const result = enrichTask(task, false);
+
+      expect(result.overdue).toBeUndefined();
+      expect(result.progress).toBe(0);
+    });
+  });
+
+  describe('enrichTasks()', () => {
+    it('should enrich array of tasks', () => {
+      const tasks = [
+        { title: 'Task 1', status: 'done', progress: 100 },
+        { title: 'Task 2', status: 'in_progress', progress: 50 }
+      ];
+
+      const result = enrichTasks(tasks, true);
+
+      expect(result).toHaveLength(2);
+      expect(result[0].progress).toBe(100);
+      expect(result[1].progress).toBe(50);
+    });
+
+    it('should handle empty array', () => {
+      const result = enrichTasks([], true);
+
+      expect(result).toEqual([]);
     });
   });
 });

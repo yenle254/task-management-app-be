@@ -142,6 +142,34 @@ const validateTaskData = (taskData) => {
   return { valid: true, message: 'Valid' };
 };
 
+/**
+ * Enrich a task document with computed fields (overdue, progress)
+ * @param {Object} task - Task document or plain object
+ * @param {Boolean} includeOverdue - Whether to calculate overdue status
+ * @returns {Object} Enriched task object
+ */
+const enrichTask = (task, includeOverdue = true) => {
+  const taskObj = task.toObject ? task.toObject() : task;
+  const enriched = { ...taskObj };
+
+  if (includeOverdue) {
+    enriched.overdue = checkIfOverdue(task);
+  }
+  enriched.progress = calculateProgress(task);
+
+  return enriched;
+};
+
+/**
+ * Enrich an array of tasks
+ * @param {Array} tasks - Array of task documents
+ * @param {Boolean} includeOverdue - Whether to calculate overdue status
+ * @returns {Array} Array of enriched tasks
+ */
+const enrichTasks = (tasks, includeOverdue = true) => {
+  return tasks.map(t => enrichTask(t, includeOverdue));
+};
+
 module.exports = {
   calculateProgress,
   checkIfOverdue,
@@ -149,5 +177,7 @@ module.exports = {
   canUserAccessTask,
   canCreateOrAssignTask,
   canUpdateTaskStatus,
-  validateTaskData
+  validateTaskData,
+  enrichTask,
+  enrichTasks
 };
