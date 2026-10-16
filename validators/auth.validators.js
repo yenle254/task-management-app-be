@@ -5,6 +5,7 @@
 
 const { body, param, validationResult } = require('express-validator');
 const User = require('../models/user.model');
+const { PASSWORD, USER_ROLES } = require('../utils/constants.utils');
 
 /**
  * Validation chain for user registration
@@ -26,12 +27,13 @@ const registerValidation = [
 
   body('password')
     .notEmpty().withMessage('Password is required')
-    .isLength({ min: 6, max: 128 }).withMessage('Password must be between 6 and 128 characters'),
+    .isLength({ min: PASSWORD.MIN_LENGTH, max: PASSWORD.MAX_LENGTH })
+    .withMessage(`Password must be between ${PASSWORD.MIN_LENGTH} and ${PASSWORD.MAX_LENGTH} characters`),
 
   body('role')
     .optional()
-    .isIn(['hr_manager', 'team_lead', 'employee'])
-    .withMessage('Role must be one of: hr_manager, team_lead, employee'),
+    .isIn(Object.values(USER_ROLES).filter(r => r !== USER_ROLES.SYSTEM_ADMIN))
+    .withMessage('Invalid role'),
 
   body('profile.fullName')
     .trim()
@@ -97,7 +99,8 @@ const verifyOTPValidation = [
   body('otp')
     .trim()
     .notEmpty().withMessage('OTP is required')
-    .isLength({ min: 6, max: 6 }).withMessage('OTP must be 6 digits')
+    .isLength({ min: PASSWORD.OTP_LENGTH, max: PASSWORD.OTP_LENGTH })
+    .withMessage(`OTP must be ${PASSWORD.OTP_LENGTH} digits`)
     .isNumeric().withMessage('OTP must be numeric')
 ];
 
@@ -117,7 +120,8 @@ const resetPasswordValidation = [
 
   body('newPassword')
     .notEmpty().withMessage('New password is required')
-    .isLength({ min: 6, max: 128 }).withMessage('Password must be between 6 and 128 characters')
+    .isLength({ min: PASSWORD.MIN_LENGTH, max: PASSWORD.MAX_LENGTH })
+    .withMessage(`Password must be between ${PASSWORD.MIN_LENGTH} and ${PASSWORD.MAX_LENGTH} characters`)
 ];
 
 /**
@@ -129,7 +133,8 @@ const changePasswordValidation = [
 
   body('newPassword')
     .notEmpty().withMessage('New password is required')
-    .isLength({ min: 6, max: 128 }).withMessage('Password must be between 6 and 128 characters')
+    .isLength({ min: PASSWORD.MIN_LENGTH, max: PASSWORD.MAX_LENGTH })
+    .withMessage(`Password must be between ${PASSWORD.MIN_LENGTH} and ${PASSWORD.MAX_LENGTH} characters`)
     .custom((value, { req }) => {
       if (value === req.body.oldPassword) {
         throw new Error('New password must be different from old password');
