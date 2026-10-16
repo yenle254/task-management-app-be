@@ -1,5 +1,7 @@
+const { USER_ROLES } = require('../utils/constants.utils');
 const express = require('express');
 const router = express.Router();
+const asyncHandler = require('../middleware/async-handler.middleware');
 const {
     submitLeave,
     getMyLeaves,
@@ -29,35 +31,35 @@ const {
 router.use(protect);
 
 // Leave balance
-router.get('/balance', getLeaveBalanceValidation, validateRequest, getLeaveBalance);
+router.get('/balance', getLeaveBalanceValidation, validateRequest, asyncHandler(getLeaveBalance));
 
 // My leaves
-router.get('/my', getLeavesValidation, validateRequest, getMyLeaves);
+router.get('/my', getLeavesValidation, validateRequest, asyncHandler(getMyLeaves));
 
 // Leave statistics (for dashboard)
-router.get('/statistics', authorize('team_lead', 'hr_manager'), getLeaveStatistics);
+router.get('/statistics', authorize(USER_ROLES.TEAM_LEAD, USER_ROLES.HR_MANAGER), asyncHandler(getLeaveStatistics));
 
 // Pending leaves (for approval)
-router.get('/pending', authorize('team_lead', 'hr_manager'), getPendingLeaves);
+router.get('/pending', authorize(USER_ROLES.TEAM_LEAD, USER_ROLES.HR_MANAGER), asyncHandler(getPendingLeaves));
 
 // All leaves (HR Manager only)
-router.get('/', authorize('hr_manager'), getLeavesValidation, validateRequest, getAllLeaves);
+router.get('/', authorize(USER_ROLES.HR_MANAGER), getLeavesValidation, validateRequest, asyncHandler(getAllLeaves));
 
 // Team leaves
-router.get('/team/:teamId', authorize('team_lead', 'hr_manager'), getTeamLeavesValidation, validateRequest, getTeamLeaves);
+router.get('/team/:teamId', authorize(USER_ROLES.TEAM_LEAD, USER_ROLES.HR_MANAGER), getTeamLeavesValidation, validateRequest, asyncHandler(getTeamLeaves));
 
 // Submit leave
-router.post('/', submitLeaveValidation, validateRequest, submitLeave);
+router.post('/', submitLeaveValidation, validateRequest, asyncHandler(submitLeave));
 
 // Approve/Reject leave
-router.put('/:id/approve', authorize('team_lead', 'hr_manager'), processLeaveValidation, validateRequest, approveLeave);
-router.put('/:id/reject', authorize('team_lead', 'hr_manager'), processLeaveValidation, validateRequest, rejectLeave);
+router.put('/:id/approve', authorize(USER_ROLES.TEAM_LEAD, USER_ROLES.HR_MANAGER), processLeaveValidation, validateRequest, asyncHandler(approveLeave));
+router.put('/:id/reject', authorize(USER_ROLES.TEAM_LEAD, USER_ROLES.HR_MANAGER), processLeaveValidation, validateRequest, asyncHandler(rejectLeave));
 
 // Get leave by ID
-router.get('/:id', getLeaveByIdValidation, validateRequest, getLeaveById);
+router.get('/:id', getLeaveByIdValidation, validateRequest, asyncHandler(getLeaveById));
 
 // Cancel leave (only pending)
-router.delete('/:id', cancelLeaveValidation, validateRequest, cancelLeave);
+router.delete('/:id', cancelLeaveValidation, validateRequest, asyncHandler(cancelLeave));
 
 module.exports = router;
 
