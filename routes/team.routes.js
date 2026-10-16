@@ -1,5 +1,6 @@
 const express = require("express");
 const router = express.Router();
+const asyncHandler = require("../middleware/async-handler.middleware");
 const {
   createTeam,
   getAllTeams,
@@ -24,7 +25,7 @@ router.get(
   "/members",
   protect,
   authorize(USER_ROLES.HR_MANAGER),
-  getAllMembers
+  asyncHandler(getAllMembers)
 );
 
 // Get available leaders (must be before /:id routes)
@@ -32,36 +33,36 @@ router.get(
   "/available-leaders",
   protect,
   authorize(USER_ROLES.HR_MANAGER),
-  getAvailableLeaders
+  asyncHandler(getAvailableLeaders)
 );
 
 // General team routes
-router.post("/", protect, authorize(USER_ROLES.HR_MANAGER), createTeam);
-router.get("/", protect, authorize(USER_ROLES.HR_MANAGER), getAllTeams);
-router.get("/:id", protect, authorize(USER_ROLES.HR_MANAGER), getTeamById);
-router.put("/:id", protect, authorize(USER_ROLES.HR_MANAGER), updateTeam);
-router.delete("/:id", protect, authorize(USER_ROLES.HR_MANAGER), deleteTeam);
+router.post("/", protect, authorize(USER_ROLES.HR_MANAGER), asyncHandler(createTeam));
+router.get("/", protect, authorize(USER_ROLES.HR_MANAGER), asyncHandler(getAllTeams));
+router.get("/:id", protect, authorize(USER_ROLES.HR_MANAGER), asyncHandler(getTeamById));
+router.put("/:id", protect, authorize(USER_ROLES.HR_MANAGER), asyncHandler(updateTeam));
+router.delete("/:id", protect, authorize(USER_ROLES.HR_MANAGER), asyncHandler(deleteTeam));
 
 // Team member operations
 router.post(
   "/:id/members",
   protect,
   authorize(USER_ROLES.TEAM_LEAD, USER_ROLES.HR_MANAGER),
-  addMember
+  asyncHandler(addMember)
 );
 
 router.get(
   "/:id/members",
   protect,
   authorize(USER_ROLES.TEAM_LEAD, USER_ROLES.HR_MANAGER),
-  getTeamMembers
+  asyncHandler(getTeamMembers)
 );
 
 router.delete(
   "/:id/members/:userId",
   protect,
   authorize(USER_ROLES.TEAM_LEAD, USER_ROLES.HR_MANAGER),
-  removeMember
+  asyncHandler(removeMember)
 );
 
 // Team leader operations
@@ -69,7 +70,7 @@ router.put(
   "/:id/leader",
   protect,
   authorize(USER_ROLES.HR_MANAGER),
-  assignTeamLead
+  asyncHandler(assignTeamLead)
 );
 
 module.exports = router;

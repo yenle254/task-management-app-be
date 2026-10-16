@@ -1,5 +1,6 @@
 const express = require("express");
 const router = express.Router();
+const asyncHandler = require("../middleware/async-handler.middleware");
 const {
   register,
   login,
@@ -25,16 +26,16 @@ const {
 } = require("../validators");
 
 // Strict rate limit for sensitive auth endpoints
-router.post("/register", strictLimiter, registerValidation, validateRequest, register);
-router.post("/login", strictLimiter, loginValidation, validateRequest, login);
-router.post("/forgot-password", strictLimiter, forgotPasswordValidation, validateRequest, forgotPassword);
-router.post("/verify-otp", strictLimiter, verifyOTPValidation, validateRequest, verifyOTP);
-router.post("/reset-password", strictLimiter, resetPasswordValidation, validateRequest, resetPassword);
-router.post("/resend-otp", strictLimiter, forgotPasswordValidation, validateRequest, resendOTP);
+router.post("/register", strictLimiter, registerValidation, validateRequest, asyncHandler(register));
+router.post("/login", strictLimiter, loginValidation, validateRequest, asyncHandler(login));
+router.post("/forgot-password", strictLimiter, forgotPasswordValidation, validateRequest, asyncHandler(forgotPassword));
+router.post("/verify-otp", strictLimiter, verifyOTPValidation, validateRequest, asyncHandler(verifyOTP));
+router.post("/reset-password", strictLimiter, resetPasswordValidation, validateRequest, asyncHandler(resetPassword));
+router.post("/resend-otp", strictLimiter, forgotPasswordValidation, validateRequest, asyncHandler(resendOTP));
 
 // Protected routes (no rate limit on auth endpoints that require existing session)
-router.put("/password", protect, changePasswordValidation, validateRequest, changePassword);
-router.get("/me", protect, getMe);
-router.put("/profile", protect, updateProfileValidation, validateRequest, updateProfile);
+router.put("/password", protect, changePasswordValidation, validateRequest, asyncHandler(changePassword));
+router.get("/me", protect, asyncHandler(getMe));
+router.put("/profile", protect, updateProfileValidation, validateRequest, asyncHandler(updateProfile));
 
 module.exports = router;

@@ -1,5 +1,7 @@
+const { USER_ROLES } = require('../utils/constants.utils');
 const express = require('express');
 const router = express.Router();
+const asyncHandler = require('../middleware/async-handler.middleware');
 const {
     clockIn,
     clockOut,
@@ -24,30 +26,30 @@ const {
 router.use(protect);
 
 // Clockin
-router.post('/clockin', clockInValidation, validateRequest, clockIn);
+router.post('/clockin', clockInValidation, validateRequest, asyncHandler(clockIn));
 
 // Clockout
-router.post('/clockout', clockOut);
+router.post('/clockout', asyncHandler(clockOut));
 
 // Get my attendance records
-router.get('/my', getAttendanceValidation, validateRequest, getMyAttendance);
+router.get('/my', getAttendanceValidation, validateRequest, asyncHandler(getMyAttendance));
 
 // Get today's attendance for current user
-router.get('/today', getTodayAttendance);
+router.get('/today', asyncHandler(getTodayAttendance));
 
 // Get attendance by date range
-router.get('/date', authorize('team_lead', 'hr_manager'), getAttendanceByDate);
+router.get('/date', authorize(USER_ROLES.TEAM_LEAD, USER_ROLES.HR_MANAGER), asyncHandler(getAttendanceByDate));
 
 // Get all attendance records (HR Manager only)
-router.get('/', authorize('hr_manager'), getAttendanceValidation, validateRequest, getAllAttendance);
+router.get('/', authorize(USER_ROLES.HR_MANAGER), getAttendanceValidation, validateRequest, asyncHandler(getAllAttendance));
 
 // Get team attendance records
-router.get('/team/:teamId', authorize('team_lead', 'hr_manager'), getTeamAttendanceValidation, validateRequest, getTeamAttendance);
+router.get('/team/:teamId', authorize(USER_ROLES.TEAM_LEAD, USER_ROLES.HR_MANAGER), getTeamAttendanceValidation, validateRequest, asyncHandler(getTeamAttendance));
 
 // Get attendance statistics
-router.get('/stats', getAttendanceStats);
+router.get('/stats', asyncHandler(getAttendanceStats));
 
 // Update attendance record
-router.put('/:id', authorize('hr_manager'), updateAttendanceValidation, validateRequest, updateAttendance);
+router.put('/:id', authorize(USER_ROLES.HR_MANAGER), updateAttendanceValidation, validateRequest, asyncHandler(updateAttendance));
 
 module.exports = router;
