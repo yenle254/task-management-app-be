@@ -6,6 +6,9 @@ const cors = require("cors");
 const connectDB = require("./config/database");
 const errorHandler = require("./middleware/error-handler.middleware");
 const { generalLimiter } = require("./middleware/rate-limit.middleware");
+const requestId = require("./middleware/request-id.middleware");
+const requestLogger = require("./middleware/request-logger.middleware");
+const logger = require("./utils/logger.utils");
 
 dotenv.config();
 const path = require("path");
@@ -22,6 +25,10 @@ const io = new Server(server, {
 
 connectDB();
 
+// Request ID must be registered before any other middleware so all requests
+// (including 404s, parser errors, and global error handler) have a requestId.
+app.use(requestId);
+
 app.use(
   cors({
     origin: process.env.CLIENT_URL || "*",
@@ -35,7 +42,11 @@ app.set("io", io);
 
 if (process.env.NODE_ENV === "development") {
   app.use((req, res, next) => {
-    console.log(`${req.method} ${req.path}`);
+    logger.debug("HTTP request received", {
+      requestId: req.requestId,
+      method: req.method,
+      route: req.path,
+    });
     next();
   });
 }
@@ -71,6 +82,7 @@ const messageRoutes = require("./routes/message.routes");
 const uploadRoutes = require("./routes/upload.routes");
 const statisticsRoutes = require("./routes/statistics.routes");
 const officeRoutes = require("./routes/office.routes");
+const adminRoutes = require("./routes/admin.routes");
 
 // Mount routes with general rate limiting (skip for /api/auth which uses strict limiter)
 app.use("/api/auth", authRoutes);
@@ -79,11 +91,12 @@ app.use("/api/teams", generalLimiter, teamRoutes);
 app.use("/api/tasks", generalLimiter, taskRoutes);
 app.use("/api/leaves", generalLimiter, leaveRoutes);
 app.use("/api/attendance", generalLimiter, attendanceRoutes);
-app.use("/api/notifications", generalLimiter, notificationRoutes);
+app.use("/api/notifications", notificationRoutes);
 app.use("/api/messages", generalLimiter, messageRoutes);
 app.use("/api/upload", uploadRoutes);
 app.use("/api/offices", generalLimiter, officeRoutes);
 app.use("/api/statistics", generalLimiter, statisticsRoutes);
+app.use("/api/admin", adminRoutes);
 app.use("/uploads", express.static(path.join(__dirname, "uploads")));
 
 app.use((req, res, next) => {
@@ -93,6 +106,10 @@ app.use((req, res, next) => {
   });
 });
 
+// Request-completion logging must run before the global error handler
+// so that 404s, parser errors, and other failures are also captured.
+app.use(requestLogger);
+
 app.use(errorHandler);
 
 const socketHandler = require("./utils/socket-handler.utils");
@@ -100,7 +117,7 @@ socketHandler(io);
 
 const PORT = process.env.PORT;
 server.listen(PORT, () => {
-  console.log(`Server is running on port ${PORT}`);
-  console.log(`Socket.IO is ready`);
-  console.log(`Environment: ${process.env.NODE_ENV || "development"}`);
+  logger.info("Server started", { port: PORT });
+  logger.info("Socket.IO is ready");
+  logger.info("Environment", { env: process.env.NODE_ENV || "development" });
 });

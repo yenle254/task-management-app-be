@@ -1,10 +1,13 @@
+const logger = require('../utils/logger.utils');
+
+/**
+ * Global Express error handler.
+ * Preserves the existing public response shape and status-code logic.
+ * Adds structured server-side logging in all environments.
+ */
 const errorHandler = (err, req, res, next) => {
     let error = { ...err };
     error.message = err.message;
-
-    if (process.env.NODE_ENV === 'development') {
-        console.error('Error:', err);
-    }
 
     if (err.name === 'CastError') {
         const message = 'Resource not found';
@@ -32,7 +35,25 @@ const errorHandler = (err, req, res, next) => {
         error = { message, statusCode: 401 };
     }
 
-    res.status(error.statusCode || 500).json({
+    const statusCode = error.statusCode || 500;
+    const isServerError = statusCode >= 500;
+    const logMethod = isServerError ? 'error' : 'warn';
+
+    // Avoid double-logging if response already sent (e.g. aborted)
+    if (!res.headersSent) {
+        logger[logMethod]('HTTP request failed', {
+            requestId: req.requestId,
+            method: req.method,
+            route: req.originalUrl ? req.originalUrl.split('?')[0] : req.path,
+            statusCode,
+            errorName: err.name,
+            errorMessage: err.message,
+            ...(isServerError && process.env.NODE_ENV !== 'test' ? { stack: err.stack } : {}),
+        });
+    }
+
+    // Preserve original public response contract exactly
+    res.status(statusCode).json({
         success: false,
         error: error.message || 'Server Error',
         ...(process.env.NODE_ENV === 'development' && { stack: err.stack })
@@ -40,10 +61,3 @@ const errorHandler = (err, req, res, next) => {
 };
 
 module.exports = errorHandler;
-
-
-
-
-
-
-
