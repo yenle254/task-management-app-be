@@ -1,4 +1,6 @@
 const Notification = require('../models/notification.model');
+const Task = require('../models/task.model');
+const Leave = require('../models/leave.model');
 const {
   markAsRead,
   markAllAsRead,
@@ -6,6 +8,64 @@ const {
   deleteNotification,
   deleteAllNotifications
 } = require('../services/notification.service');
+const { NOTIFICATION_TYPES } = require('../utils/constants.utils');
+
+// Notification type -> Model mapping
+const TYPE_MODEL_MAP = {
+  [NOTIFICATION_TYPES.TASK_ASSIGNED]: 'task',
+  [NOTIFICATION_TYPES.TASK_UPDATED]: 'task',
+  [NOTIFICATION_TYPES.COMMENT_ADDED]: 'task',
+  [NOTIFICATION_TYPES.DEADLINE_REMINDER]: 'task',
+  [NOTIFICATION_TYPES.TASK_COMPLETED]: 'task',
+  [NOTIFICATION_TYPES.LEAVE_APPROVED]: 'leave',
+  [NOTIFICATION_TYPES.LEAVE_REJECTED]: 'leave',
+  [NOTIFICATION_TYPES.LEAVE_PENDING]: 'leave',
+};
+
+/**
+ * Batch fetch related documents by type
+ * @param {Array} notifications - Array of notification documents
+ * @returns {Array} Notifications with populated relatedId
+ */
+const populateRelatedDocs = async (notifications) => {
+  if (!notifications.length) return notifications;
+
+  // Group notifications by related model type
+  const taskIds = [];
+  const leaveIds = [];
+
+  notifications.forEach(n => {
+    const model = TYPE_MODEL_MAP[n.type];
+    if (model === 'task' && n.relatedId) {
+      taskIds.push(n.relatedId);
+    } else if (model === 'leave' && n.relatedId) {
+      leaveIds.push(n.relatedId);
+    }
+  });
+
+  // Batch fetch in parallel
+  const [tasks, leaves] = await Promise.all([
+    taskIds.length ? Task.find({ _id: { $in: taskIds } }).select('title _id').lean() : [],
+    leaveIds.length ? Leave.find({ _id: { $in: leaveIds } }).select('_id').lean() : [],
+  ]);
+
+  // Build lookup maps
+  const taskMap = new Map(tasks.map(t => [t._id.toString(), t]));
+  const leaveMap = new Map(leaves.map(l => [l._id.toString(), l]));
+
+  // Attach related docs to notifications.
+  // notifications are plain objects (from .lean()), so assign directly
+  // instead of touching the Mongoose _doc accessor.
+  return notifications.map(n => {
+    const model = TYPE_MODEL_MAP[n.type];
+    if (model === 'task' && n.relatedId) {
+      n.relatedId = taskMap.get(n.relatedId.toString()) || null;
+    } else if (model === 'leave' && n.relatedId) {
+      n.relatedId = leaveMap.get(n.relatedId.toString()) || null;
+    }
+    return n;
+  });
+};
 
 /**
  * @desc    Get all notifications for current user
@@ -23,21 +83,27 @@ const getMyNotifications = async (req, res) => {
     }
 
     const skip = (page - 1) * limit;
-    const total = await Notification.countDocuments(query);
 
-    const notifications = await Notification.find(query)
-      .populate('relatedId', 'title _id')
-      .sort({ createdAt: -1 })
-      .skip(skip)
-      .limit(parseInt(limit));
+    // Parallel count + find
+    const [total, notifications] = await Promise.all([
+      Notification.countDocuments(query),
+      Notification.find(query)
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(parseInt(limit))
+        .lean()
+    ]);
+
+    // Batch fetch related documents
+    const enriched = await populateRelatedDocs(notifications);
 
     res.json({
       success: true,
-      count: notifications.length,
+      count: enriched.length,
       total,
       page: parseInt(page),
       pages: Math.ceil(total / limit),
-      data: notifications
+      data: enriched
     });
   } catch (error) {
     console.error('Get notifications error:', error);
@@ -55,7 +121,7 @@ const getMyNotifications = async (req, res) => {
  */
 const markNotificationAsRead = async (req, res) => {
   try {
-    const notification = await Notification.findById(req.params.id);
+    const notification = await Notification.findById(req.params.id).lean();
 
     if (!notification) {
       return res.status(404).json({
@@ -117,7 +183,7 @@ const markAllNotificationsAsRead = async (req, res) => {
  */
 const deleteNotification_endpoint = async (req, res) => {
   try {
-    const notification = await Notification.findById(req.params.id);
+    const notification = await Notification.findById(req.params.id).lean();
 
     if (!notification) {
       return res.status(404).json({
@@ -205,7 +271,7 @@ const getNotificationsByType = async (req, res) => {
     const { type } = req.params;
     const { page = 1, limit = 20 } = req.query;
 
-    const validTypes = ['task_assigned', 'task_updated', 'comment_added', 'deadline_reminder', 'leave_approved', 'leave_rejected'];
+    const validTypes = Object.values(NOTIFICATION_TYPES);
     if (!validTypes.includes(type)) {
       return res.status(400).json({
         success: false,
@@ -214,27 +280,28 @@ const getNotificationsByType = async (req, res) => {
     }
 
     const skip = (page - 1) * limit;
-    const total = await Notification.countDocuments({
-      userId: req.user._id,
-      type
-    });
+    const query = { userId: req.user._id, type };
 
-    const notifications = await Notification.find({
-      userId: req.user._id,
-      type
-    })
-      .populate('relatedId')
-      .sort({ createdAt: -1 })
-      .skip(skip)
-      .limit(parseInt(limit));
+    // Parallel count + find
+    const [total, notifications] = await Promise.all([
+      Notification.countDocuments(query),
+      Notification.find(query)
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(parseInt(limit))
+        .lean()
+    ]);
+
+    // Batch fetch related documents
+    const enriched = await populateRelatedDocs(notifications);
 
     res.json({
       success: true,
-      count: notifications.length,
+      count: enriched.length,
       total,
       page: parseInt(page),
       pages: Math.ceil(total / limit),
-      data: notifications
+      data: enriched
     });
   } catch (error) {
     console.error('Get notifications by type error:', error);
@@ -252,5 +319,6 @@ module.exports = {
   deleteNotification_endpoint,
   deleteAllNotifications_endpoint,
   getUnreadNotificationCount,
-  getNotificationsByType
+  getNotificationsByType,
+  populateRelatedDocs
 };
