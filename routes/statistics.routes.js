@@ -9,6 +9,7 @@ const {
   getAttendanceStats,
   getLeaveStats,
   getTaskStats,
+  getPerformanceTrends,
   getTeamPerformance,
 } = require("../controllers/statistics.controller");
 
@@ -21,5 +22,6 @@ router.get("/attendance", asyncHandler(getAttendanceStats));
 router.get("/leaves", asyncHandler(getLeaveStats));
 router.get("/tasks", asyncHandler(getTaskStats));
 router.get("/team-performance", asyncHandler(getTeamPerformance));
+router.get("/performance-trends", asyncHandler(getPerformanceTrends));
 
 module.exports = router;

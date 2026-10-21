@@ -14,6 +14,11 @@ const {
   getAllMembers,
   getAvailableLeaders
 } = require("../controllers/team.controller");
+const {
+  getMemberProgress,
+  getTeamPerformanceEndpoint,
+  getTeamOverdue
+} = require("../controllers/team-dashboard.controller");
 const { protect, authorize } = require("../middleware/auth.middleware");
 const { USER_ROLES } = require("../utils/constants.utils");
 
@@ -71,6 +76,28 @@ router.put(
   protect,
   authorize(USER_ROLES.HR_MANAGER),
   asyncHandler(assignTeamLead)
+);
+
+// Team dashboard routes (Team Lead / HR access)
+router.get(
+  "/:id/members/progress",
+  protect,
+  authorize(USER_ROLES.TEAM_LEAD, USER_ROLES.HR_MANAGER),
+  asyncHandler(getMemberProgress)
+);
+
+router.get(
+  "/:id/performance",
+  protect,
+  authorize(USER_ROLES.TEAM_LEAD, USER_ROLES.HR_MANAGER),
+  asyncHandler(getTeamPerformanceEndpoint)
+);
+
+router.get(
+  "/:id/overdue",
+  protect,
+  authorize(USER_ROLES.TEAM_LEAD, USER_ROLES.HR_MANAGER),
+  asyncHandler(getTeamOverdue)
 );
 
 module.exports = router;

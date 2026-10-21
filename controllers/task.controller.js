@@ -12,6 +12,7 @@ const {
   enrichTask,
   enrichTasks
 } = require('../services/task.service');
+const { USER_ROLES, TASK_STATUS, PAGINATION, TASK_PROGRESS } = require('../utils/constants.utils');
 const {
   notifyTaskAssigned,
   notifyTaskUpdated,
@@ -19,6 +20,8 @@ const {
   notifyCommentAdded
 } = require('../services/notification.service');
 const { getFileUrl, deleteFile, getOriginalFilename } = require('../middleware/upload.middleware');
+const { applyDateFilter, parseDate, validateDateRange } = require('../utils/dashboard.helper');
+const { resolveReadableTeam } = require('../services/team-dashboard.service');
 
 
 /**
@@ -46,7 +49,7 @@ const createTask = async (req, res) => {
     }
 
     // Team lead can only create tasks for their own team
-    if (req.user.role === 'team_lead') {
+    if (req.user.role === USER_ROLES.TEAM_LEAD) {
       if (!req.user.teamId) {
         return res.status(400).json({
           success: false,
@@ -88,7 +91,7 @@ const createTask = async (req, res) => {
       assignedTo,
       teamId,
       priority,
-      status: 'todo',
+      status: TASK_STATUS.TODO,
       dueDate: dueDate || null,
       startDate: startDate || null,
       tags,
@@ -130,16 +133,16 @@ const createTask = async (req, res) => {
  */
 const getAllTasks = async (req, res) => {
   try {
-    const { page = 1, limit = 100, status, priority, teamId, search } = req.query;
-    const query = { status: { $ne: 'deleted' } };
+    const { page = PAGINATION.DEFAULT_PAGE, limit = PAGINATION.TASKS_DEFAULT_LIMIT, status, priority, teamId, search } = req.query;
+    const query = { status: { $ne: TASK_STATUS.DELETED } };
 
     // Only HR Manager and Team Lead can view all tasks
-    if (req.user.role === 'hr_manager') {
+    if (req.user.role === USER_ROLES.HR_MANAGER) {
       // HR Manager: see all tasks, optionally filter by teamId
       if (teamId) {
         query.teamId = teamId;
       }
-    } else if (req.user.role === 'team_lead') {
+    } else if (req.user.role === USER_ROLES.TEAM_LEAD) {
       // Team Lead: see only tasks in their team
       if (!req.user.teamId) {
         return res.json({ 
@@ -204,7 +207,7 @@ const getTaskById = async (req, res) => {
       .populate('teamId', 'name')
       .populate('comments.userId', 'profile.fullName profile.position profile.avatar email');
 
-    if (!task || task.status === 'deleted') {
+    if (!task || task.status === TASK_STATUS.DELETED) {
       return res.status(404).json({
         success: false,
         error: 'Task not found'
@@ -239,7 +242,7 @@ const getTaskById = async (req, res) => {
 const updateTask = async (req, res) => {
   try {
     const task = await Task.findById(req.params.id);
-    if (!task || task.status === 'deleted') {
+    if (!task || task.status === TASK_STATUS.DELETED) {
       return res.status(404).json({ success: false, error: 'Task not found' });
     }
 
@@ -282,12 +285,14 @@ const deleteTask = async (req, res) => {
       return res.status(404).json({ success: false, error: 'Task not found' });
     }
 
-    const canDelete = req.user.role === 'hr_manager' || task.assignedBy.toString() === req.user._id.toString();
+    const canDelete = req.user.role === USER_ROLES.HR_MANAGER || task.assignedBy.toString() === req.user._id.toString();
     if (!canDelete) {
       return res.status(403).json({ success: false, error: 'Permission denied' });
     }
 
-    task.status = 'deleted';
+    task.$locals.previousStatus = task.status;
+    task.$locals.statusChangedBy = req.user._id;
+    task.status = TASK_STATUS.DELETED;
     await task.save();
 
     res.json({ success: true, message: 'Task deleted successfully' });
@@ -321,12 +326,12 @@ const assignTask = async (req, res) => {
     }
 
     const task = await Task.findById(req.params.id);
-    if (!task || task.status === 'deleted') {
+    if (!task || task.status === TASK_STATUS.DELETED) {
       return res.status(404).json({ success: false, error: 'Task not found' });
     }
 
     // Team lead can only assign tasks within their own team
-    if (req.user.role === 'team_lead') {
+    if (req.user.role === USER_ROLES.TEAM_LEAD) {
       if (!req.user.teamId) {
         return res.status(400).json({
           success: false,
@@ -387,7 +392,7 @@ const updateTaskStatus = async (req, res) => {
   try {
     const { status } = req.body;
 
-    if (!['todo', 'in_progress', 'done'].includes(status)) {
+    if (![TASK_STATUS.TODO, TASK_STATUS.IN_PROGRESS, TASK_STATUS.DONE].includes(status)) {
       return res.status(400).json({
         success: false,
         error: 'Invalid status. Must be: todo, in_progress, or done'
@@ -395,7 +400,7 @@ const updateTaskStatus = async (req, res) => {
     }
 
     const task = await Task.findById(req.params.id);
-    if (!task || task.status === 'deleted') {
+    if (!task || task.status === TASK_STATUS.DELETED) {
       return res.status(404).json({ success: false, error: 'Task not found' });
     }
 
@@ -407,14 +412,14 @@ const updateTaskStatus = async (req, res) => {
       const completedCount = task.subTasks.filter(st => st.isCompleted).length;
       const totalSubtasks = task.subTasks.length;
 
-      if (status === 'done' && completedCount < totalSubtasks) {
+      if (status === TASK_STATUS.DONE && completedCount < totalSubtasks) {
         return res.status(400).json({
           success: false,
           error: `Cannot mark as done. ${totalSubtasks - completedCount} subtask(s) still incomplete.`
         });
       }
 
-      if (status === 'todo' && completedCount > 0) {
+      if (status === TASK_STATUS.TODO && completedCount > 0) {
         return res.status(400).json({
           success: false,
           error: `Cannot mark as todo. ${completedCount} subtask(s) already completed. Use 'in_progress' instead.`
@@ -422,14 +427,28 @@ const updateTaskStatus = async (req, res) => {
       }
     }
 
+    const previousStatus = task.status;
     task.status = status;
+
+    // Record the transition so the history keeps every completion event, even
+    // when a task is reopened and completed again later.
+    task.$locals.previousStatus = previousStatus;
+    task.$locals.statusChangedBy = req.user._id;
+
+    // Track completion time
+    if (status === TASK_STATUS.DONE && previousStatus !== TASK_STATUS.DONE) {
+      task.completedAt = new Date();
+    } else if (status !== TASK_STATUS.DONE && previousStatus === TASK_STATUS.DONE) {
+      task.completedAt = null;
+    }
+
     await task.save();
 
     // Notify about task update
     await notifyTaskUpdated(task, req.user._id);
     
     // If task is completed, send special notification
-    if (status === 'done') {
+    if (status === TASK_STATUS.DONE) {
       await notifyTaskCompleted(task, req.user._id);
     }
 
@@ -455,15 +474,15 @@ const updateTaskProgress = async (req, res) => {
   try {
     const { progress } = req.body;
 
-    if (progress === undefined || typeof progress !== 'number' || progress < 0 || progress > 100) {
+    if (progress === undefined || typeof progress !== 'number' || progress < TASK_PROGRESS.MIN || progress > TASK_PROGRESS.MAX) {
       return res.status(400).json({
         success: false,
-        error: 'Progress must be a number between 0 and 100'
+        error: `Progress must be a number between ${TASK_PROGRESS.MIN} and ${TASK_PROGRESS.MAX}`
       });
     }
 
     const task = await Task.findById(req.params.id);
-    if (!task || task.status === 'deleted') {
+    if (!task || task.status === TASK_STATUS.DELETED) {
       return res.status(404).json({ success: false, error: 'Task not found' });
     }
 
@@ -474,10 +493,20 @@ const updateTaskProgress = async (req, res) => {
     task.progress = progress;
 
     // Auto-update status based on progress
-    if (progress === 100 && task.status !== 'done') {
-      task.status = 'done';
-    } else if (progress > 0 && task.status === 'todo') {
-      task.status = 'in_progress';
+    const previousStatus = task.status;
+    task.$locals.previousStatus = previousStatus;
+    task.$locals.statusChangedBy = req.user._id;
+    if (progress === TASK_PROGRESS.DONE_THRESHOLD && task.status !== TASK_STATUS.DONE) {
+      task.status = TASK_STATUS.DONE;
+      task.completedAt = new Date();
+    } else if (progress > TASK_PROGRESS.IN_PROGRESS_THRESHOLD && task.status === TASK_STATUS.TODO) {
+      task.status = TASK_STATUS.IN_PROGRESS;
+    } else if (progress < TASK_PROGRESS.IN_PROGRESS_THRESHOLD && task.status === TASK_STATUS.IN_PROGRESS) {
+      task.status = TASK_STATUS.TODO;
+      task.completedAt = null;
+    } else if (progress < TASK_PROGRESS.DONE_THRESHOLD && task.status === TASK_STATUS.DONE) {
+      task.status = TASK_STATUS.IN_PROGRESS;
+      task.completedAt = null;
     }
 
     await task.save();
@@ -502,14 +531,30 @@ const updateTaskProgress = async (req, res) => {
  */
 const getMyTasks = async (req, res) => {
   try {
-    const { page = 1, limit = 1000, status, priority } = req.query;
+    const { page = 1, limit = 1000, status, priority, startDate, endDate } = req.query;
+
+    const rangeCheck = validateDateRange(startDate, endDate);
+    if (!rangeCheck.valid) {
+      return res.status(400).json({ success: false, error: rangeCheck.error });
+    }
+    if ((startDate && !endDate) || (!startDate && endDate)) {
+      return res.status(400).json({
+        success: false,
+        error: 'Both startDate and endDate are required when specifying a date range'
+      });
+    }
+
     const query = {
       assignedTo: req.user._id,
-      status: { $ne: 'deleted' }
+      status: { $ne: TASK_STATUS.DELETED }
     };
 
     if (status) query.status = status;
     if (priority) query.priority = priority;
+
+    // Date filters are applied inside the MongoDB query so pagination totals
+    // stay consistent with the returned page.
+    applyDateFilter(query, 'createdAt', parseDate(startDate), parseDate(endDate));
 
     const skip = (page - 1) * limit;
     const total = await Task.countDocuments(query);
@@ -549,9 +594,19 @@ const getTeamTasks = async (req, res) => {
     const { teamId } = req.params;
     const { page = 1, limit = 10, status } = req.query;
 
+    // The teamId comes from the client, so the caller's authority over that
+    // team is resolved from the database before any task is read.
+    const access = await resolveReadableTeam(req.user, teamId);
+    if (!access.ok) {
+      return res.status(access.status).json({
+        success: false,
+        error: access.error
+      });
+    }
+
     const query = {
-      teamId,
-      status: { $ne: 'deleted' }
+      teamId: access.team._id,
+      status: { $ne: TASK_STATUS.DELETED }
     };
 
     if (status) query.status = status;
@@ -597,7 +652,7 @@ const addComment = async (req, res) => {
     }
 
     const task = await Task.findById(req.params.id);
-    if (!task || task.status === 'deleted') {
+    if (!task || task.status === TASK_STATUS.DELETED) {
       return res.status(404).json({ success: false, error: 'Task not found' });
     }
 
@@ -647,7 +702,7 @@ const getOverdueTasks = async (req, res) => {
       dueDate: { $lt: new Date() }
     };
 
-    if (!forTeam || req.user.role !== 'team_lead') {
+    if (!forTeam || req.user.role !== USER_ROLES.TEAM_LEAD) {
       query.assignedTo = req.user._id;
     } else {
       query.teamId = req.user.teamId;
@@ -708,7 +763,7 @@ const addAttachment = async (req, res) => {
     }
 
     const task = await Task.findById(req.params.id);
-    if (!task || task.status === 'deleted') {
+    if (!task || task.status === TASK_STATUS.DELETED) {
       deleteFile(req.file.filename);
       return res.status(404).json({
         success: false,
@@ -770,7 +825,7 @@ const addAttachmentBulk = async (req, res) => {
     }
 
     const task = await Task.findById(req.params.id);
-    if (!task || task.status === 'deleted') {
+    if (!task || task.status === TASK_STATUS.DELETED) {
       // Delete all uploaded files from local disk
       for (const file of req.files) {
         await deleteFile(file.filename);
@@ -841,7 +896,7 @@ const createSubtask = async (req, res) => {
     }
 
     const task = await Task.findById(req.params.id);
-    if (!task || task.status === 'deleted') {
+    if (!task || task.status === TASK_STATUS.DELETED) {
       return res.status(404).json({ 
         success: false, 
         error: 'Task not found' 
@@ -900,7 +955,7 @@ const toggleSubtask = async (req, res) => {
     const { id, subtaskId } = req.params;
 
     const task = await Task.findById(id);
-    if (!task || task.status === 'deleted') {
+    if (!task || task.status === TASK_STATUS.DELETED) {
       return res.status(404).json({ 
         success: false, 
         error: 'Task not found' 
@@ -935,6 +990,11 @@ const toggleSubtask = async (req, res) => {
     // Mark as completed (only allow false -> true)
     subtask.isCompleted = true;
     subtask.updatedAt = new Date();
+
+    // Completing the last subtask completes the task itself. The status is
+    // derived inside the pre-save hook, so the loaded status is used as the
+    // "from" value of the recorded transition.
+    task.$locals.statusChangedBy = req.user._id;
 
     await task.save(); // This will trigger progress recalculation
 
@@ -972,7 +1032,7 @@ const updateSubtask = async (req, res) => {
     const { title, isCompleted } = req.body;
 
     const task = await Task.findById(id);
-    if (!task || task.status === 'deleted') {
+    if (!task || task.status === TASK_STATUS.DELETED) {
       return res.status(404).json({ 
         success: false, 
         error: 'Task not found' 
@@ -1038,7 +1098,7 @@ const deleteSubtask = async (req, res) => {
     const { id, subtaskId } = req.params;
 
     const task = await Task.findById(id);
-    if (!task || task.status === 'deleted') {
+    if (!task || task.status === TASK_STATUS.DELETED) {
       return res.status(404).json({ 
         success: false, 
         error: 'Task not found' 
@@ -1093,7 +1153,7 @@ const getSubtasks = async (req, res) => {
   try {
     const task = await Task.findById(req.params.id);
     
-    if (!task || task.status === 'deleted') {
+    if (!task || task.status === TASK_STATUS.DELETED) {
       return res.status(404).json({ 
         success: false, 
         error: 'Task not found' 

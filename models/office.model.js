@@ -3,6 +3,7 @@
  * Lưu trữ thông tin office/location cho phép check-in
  */
 const mongoose = require('mongoose');
+const { OFFICE } = require('../utils/constants.utils');
 
 const OfficeSchema = new mongoose.Schema({
   name: {
@@ -28,9 +29,9 @@ const OfficeSchema = new mongoose.Schema({
   // Bán kính cho phép check-in (tính bằng mét)
   radius: {
     type: Number,
-    default: 200, // 200m
-    min: 10,
-    max: 1000
+    default: OFFICE.DEFAULT_RADIUS,
+    min: OFFICE.MIN_RADIUS,
+    max: OFFICE.MAX_RADIUS
   },
   // Thời gian làm việc mặc định
   workingHours: {

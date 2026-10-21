@@ -69,15 +69,27 @@ const getUserById = async (userId) => {
  */
 
 const updateUser = async (userId, updateData) => {
-  const restrictedFields = ["email", "password", "_id"];
-  restrictedFields.forEach((field) => delete updateData[field]);
+  // Whitelist only allowed fields - prevent mass assignment
+  const allowedFields = [
+    "profile.fullName",
+    "profile.department",
+    "profile.position",
+    "profile.phone",
+    "profile.avatar",
+    "profile.employeeId"
+  ];
+
+  const sanitizedData = {};
+  allowedFields.forEach(field => {
+    if (updateData[field] !== undefined) {
+      sanitizedData[field] = updateData[field];
+    }
+  });
+
   const user = await User.findByIdAndUpdate(
     userId,
-    updateData, 
-    {
-      new: true,
-      runValidators: true,
-    }
+    { $set: sanitizedData },
+    { new: true, runValidators: true }
   ).select("-password");
 
   return user;

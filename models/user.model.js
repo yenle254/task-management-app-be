@@ -1,4 +1,5 @@
 const mongoose = require("mongoose");
+const { PASSWORD } = require("../utils/constants.utils");
 
 const ProfileSchema = new mongoose.Schema(
   {
@@ -32,10 +33,10 @@ const UserSchema = new mongoose.Schema(
       lowercase: true,
       trim: true,
     },
-    password: { type: String, required: true, minLength: 6, select: false },
+    password: { type: String, required: true, minLength: PASSWORD.MIN_LENGTH, select: false },
     role: {
       type: String,
-      enum: ["hr_manager", "team_lead", "employee"],
+      enum: ["system_admin", "hr_manager", "team_lead", "employee"],
       default: "employee",
       index: true,
     },

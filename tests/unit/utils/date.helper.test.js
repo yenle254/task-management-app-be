@@ -166,9 +166,32 @@ describe('dateHelper', () => {
     it('should handle string date input', () => {
       const futureDate = new Date();
       futureDate.setDate(futureDate.getDate() + 10);
-      const result = dateHelper.daysUntil(futureDate.toISOString().split('T')[0]);
+      // Build a LOCAL date string. toISOString() would yield the UTC calendar
+      // day, which is a different day in timezones ahead of UTC.
+      const dateOnly = [
+        futureDate.getFullYear(),
+        String(futureDate.getMonth() + 1).padStart(2, '0'),
+        String(futureDate.getDate()).padStart(2, '0')
+      ].join('-');
+      const result = dateHelper.daysUntil(dateOnly);
 
       expect(result).toBe(10);
+    });
+
+    it('should parse a date-only string as local midnight', () => {
+      const parsed = dateHelper.parseDateOnly('2025-03-10');
+
+      expect(parsed).toBeInstanceOf(Date);
+      expect(parsed.getFullYear()).toBe(2025);
+      expect(parsed.getMonth()).toBe(2);
+      expect(parsed.getDate()).toBe(10);
+      expect(parsed.getHours()).toBe(0);
+    });
+
+    it('should return null for an invalid date-only string', () => {
+      expect(dateHelper.parseDateOnly('2025-02-31')).toBeNull();
+      expect(dateHelper.parseDateOnly('not-a-date')).toBeNull();
+      expect(dateHelper.parseDateOnly('')).toBeNull();
     });
 
     it('should round up partial days', () => {
