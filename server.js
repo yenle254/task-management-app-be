@@ -8,6 +8,7 @@ const errorHandler = require("./middleware/error-handler.middleware");
 const { generalLimiter } = require("./middleware/rate-limit.middleware");
 const requestId = require("./middleware/request-id.middleware");
 const requestLogger = require("./middleware/request-logger.middleware");
+const sanitizeServerError = require("./middleware/sanitize-server-error.middleware");
 const logger = require("./utils/logger.utils");
 
 dotenv.config();
@@ -28,6 +29,7 @@ connectDB();
 // Request ID must be registered before any other middleware so all requests
 // (including 404s, parser errors, and global error handler) have a requestId.
 app.use(requestId);
+app.use(sanitizeServerError);
 
 app.use(
   cors({

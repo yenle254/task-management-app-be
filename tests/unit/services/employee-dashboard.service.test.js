@@ -28,14 +28,18 @@ describe('employee-dashboard.service', () => {
    * Route each countDocuments call to the right count based on the filter.
    */
   const mockCounts = (counts) => {
+    aggregateSpy.mockImplementation(async (pipeline) =>
+      pipeline.some((stage) => stage.$count)
+        ? [{ total: counts.completed || 0 }]
+        : []
+    );
     countDocumentsSpy.mockImplementation(async (filter = {}) => {
       if (filter.assignedTo && filter.assignedTo.toString() !== userId.toString()) {
         return 0;
       }
-      if (filter.status === 'done') return counts.completed || 0;
+      if (filter.status === 'in_progress') return counts.inProgress || 0;
       if (Array.isArray(filter.status?.$in)) {
         if (filter.dueDate) return counts.overdue || 0;
-        return counts.inProgress || 0;
       }
       return 0;
     });
@@ -100,6 +104,7 @@ describe('employee-dashboard.service', () => {
       expect(data.tasks.inProgress).toBe(4);
       expect(data.tasks.completed).toBe(7);
       expect(data.tasks.overdue).toBe(2);
+      expect(countDocumentsSpy.mock.calls[0][0].status).toBe('in_progress');
     });
 
     test('scopes every task query to the authenticated user', async () => {
@@ -127,25 +132,21 @@ describe('employee-dashboard.service', () => {
 
     test('counts completed tasks using the completedAt timestamp', async () => {
       mockCounts({ completed: 3 });
-      await getEmployeeDashboard(userId, {});
+      const data = await getEmployeeDashboard(userId, {});
 
-      const completedCall = countDocumentsSpy.mock.calls.find(
-        ([filter]) => filter.status === 'done'
-      );
-      expect(completedCall).toBeDefined();
-      expect(completedCall[0].completedAt).toBeDefined();
-      expect(completedCall[0].completedAt.$gte).toBeInstanceOf(Date);
-      expect(completedCall[0].completedAt.$lte).toBeInstanceOf(Date);
+      expect(data.tasks.completed).toBe(3);
+      const completedPipeline = aggregateSpy.mock.calls.find(
+        ([pipeline]) => pipeline.some((stage) => stage.$count)
+      )[0];
+      expect(completedPipeline[2].$match['statusHistory.at'].$gte).toBeInstanceOf(Date);
+      expect(completedPipeline[2].$match['statusHistory.at'].$lte).toBeInstanceOf(Date);
     });
 
     test('does not use updatedAt as a completion proxy', async () => {
       mockCounts({ completed: 3 });
       await getEmployeeDashboard(userId, {});
 
-      const completedCall = countDocumentsSpy.mock.calls.find(
-        ([filter]) => filter.status === 'done'
-      );
-      expect(completedCall[0].updatedAt).toBeUndefined();
+      expect(JSON.stringify(aggregateSpy.mock.calls)).not.toContain('updatedAt');
     });
 
     test('sums only recorded work hours and never returns NaN', async () => {
@@ -158,6 +159,12 @@ describe('employee-dashboard.service', () => {
       expect(data.workHours.total).toBe(0);
       expect(Number.isNaN(data.workHours.total)).toBe(false);
       expect(Number.isFinite(data.workHours.total)).toBe(true);
+    });
+
+    test('does not return a non-finite work-hours total', async () => {
+      jest.spyOn(Attendance, 'aggregate').mockResolvedValue([{ totalWorkHours: Infinity }]);
+      const data = await getEmployeeDashboard(userId, {});
+      expect(data.workHours.total).toBe(0);
     });
 
     test('sums work hours from attendance records', async () => {
@@ -200,13 +207,11 @@ describe('employee-dashboard.service', () => {
 
     test('builds a performance trend from real completion events', async () => {
       aggregateSpy.mockImplementation((pipeline) => {
-        // The trend runs two aggregations: completions then creations.
-        if (pipeline[0].$match.status === 'done') {
-          return Promise.resolve([
-            { _id: '2025-01-06', completed: 2, onTime: 1 }
-          ]);
-        }
-        return Promise.resolve([{ _id: '2025-01-06', total: 3 }]);
+        if (pipeline.some((stage) => stage.$count)) return Promise.resolve([]);
+        return Promise.resolve([{
+          _id: '2025-01', totalTasks: 3, createdTasks: 2,
+          completedTasks: 2, completedWithDueDate: 2, onTimeTasks: 1
+        }]);
       });
 
       const data = await getEmployeeDashboard(userId, {
@@ -216,7 +221,7 @@ describe('employee-dashboard.service', () => {
 
       expect(data.performanceTrend).toHaveLength(1);
       expect(data.performanceTrend[0]).toMatchObject({
-        period: '2025-01-06',
+        period: '2025-01',
         totalTasks: 3,
         completedTasks: 2
       });

@@ -3,9 +3,10 @@ const User = require('../models/user.model');
 const Task = require('../models/task.model');
 const Attendance = require('../models/attendance.model');
 const Leave = require('../models/leave.model');
-const Team = require('../models/team.model');
-const { TASK_STATUS, ATTENDANCE_STATUS, LEAVE_STATUS } = require('../utils/constants.utils');
-const { percentage, OPEN_STATUSES } = require('../utils/dashboard.helper');
+const { getTaskEventTrend } = require('./task-history.service');
+const attendanceService = require('./attendance.service');
+const { TASK_STATUS, ATTENDANCE_STATUS, LEAVE_STATUS, USER_ROLES } = require('../utils/constants.utils');
+const { percentage, OPEN_STATUSES, applyDateFilter } = require('../utils/dashboard.helper');
 
 /**
  * Statistics service for HR Manager dashboards.
@@ -15,12 +16,11 @@ const { percentage, OPEN_STATUSES } = require('../utils/dashboard.helper');
  *  - completionRate = doneTasks / totalTasks * 100
  *  - overdueRate    = overdueTasks / totalTasks * 100
  *  - onTimeRate     = onTimeTasks / completedTasksWithBothDates * 100
- *  - attendance onTimeRate = presentRecords / validAttendanceRecords * 100
- *  - attendance lateRate   = lateRecords   / validAttendanceRecords * 100
+ *  - attendance onTimeRate = presentRecords / (storedRecords + calculatedAbsences) * 100
+ *  - attendance lateRate   = lateRecords   / (storedRecords + calculatedAbsences) * 100
  *
- * A task counts as "on time" only when it has both a dueDate and a completedAt
- * and completedAt <= dueDate. Tasks without a completion timestamp are
- * excluded from both the numerator and the denominator.
+ * A task counts as on time only when its recorded completion event has a
+ * due-date snapshot and the event time is no later than that due date.
  */
 
 const VALID_ATTENDANCE_STATUSES = [
@@ -28,6 +28,51 @@ const VALID_ATTENDANCE_STATUSES = [
   ATTENDANCE_STATUS.LATE,
   ATTENDANCE_STATUS.ABSENT
 ];
+
+const countCalculatedAbsences = async (startDate, endDate) => {
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const lastDay = new Date(Math.min(endDate.getTime(), today.getTime() - 1));
+  if (lastDay < startDate) return { total: 0, byDate: {} };
+
+  const workingDays = attendanceService.getWorkingDays(startDate, lastDay);
+  if (workingDays.length === 0) return { total: 0, byDate: {} };
+
+  const [users, records] = await Promise.all([
+    User.find({
+      isActive: true,
+      role: { $in: [USER_ROLES.EMPLOYEE, USER_ROLES.TEAM_LEAD, USER_ROLES.HR_MANAGER] },
+      createdAt: { $lte: lastDay }
+    }).select('_id createdAt').lean(),
+    Attendance.find({
+      date: { $gte: startDate, $lte: lastDay },
+      status: { $in: VALID_ATTENDANCE_STATUSES }
+    }).select('userId date').lean()
+  ]);
+
+  const dateKey = (date) => {
+    const d = new Date(date);
+    return [d.getFullYear(), String(d.getMonth() + 1).padStart(2, '0'),
+      String(d.getDate()).padStart(2, '0')].join('-');
+  };
+  const recorded = new Set(records.map((record) =>
+    `${record.userId.toString()}:${dateKey(record.date)}`
+  ));
+
+  let absent = 0;
+  const byDate = {};
+  for (const user of users) {
+    const createdDay = new Date(user.createdAt);
+    createdDay.setHours(0, 0, 0, 0);
+    for (const day of workingDays) {
+      if (day >= createdDay && !recorded.has(`${user._id.toString()}:${dateKey(day)}`)) {
+        absent += 1;
+        byDate[dateKey(day)] = (byDate[dateKey(day)] || 0) + 1;
+      }
+    }
+  }
+  return { total: absent, byDate };
+};
 
 /**
  * Build a MongoDB filter for tasks from query params.
@@ -38,11 +83,7 @@ const VALID_ATTENDANCE_STATUSES = [
 const buildTaskFilter = (query = {}) => {
   const filter = { status: { $ne: TASK_STATUS.DELETED } };
 
-  if (query.startDate || query.endDate) {
-    filter.createdAt = {};
-    if (query.startDate) filter.createdAt.$gte = query.startDate;
-    if (query.endDate) filter.createdAt.$lte = query.endDate;
-  }
+  applyDateFilter(filter, 'createdAt', query.startDate, query.endDate);
 
   if (query.teamId) {
     filter.teamId = new mongoose.Types.ObjectId(query.teamId);
@@ -73,9 +114,8 @@ const buildTaskFilter = (query = {}) => {
 /**
  * Attendance statistics with on-time / late rates.
  *
- * `present` means the employee was on time, `late` means they arrived late,
- * `absent` means no show. The denominator is every attendance record with a
- * known status.
+ * `present` means the employee was on time, `late` means they arrived late.
+ * Missing past workdays for active staff are counted as calculated absences.
  *
  * @param {Date} startDate
  * @param {Date} endDate
@@ -87,7 +127,7 @@ const getAttendanceStats = async (startDate, endDate) => {
     status: { $in: VALID_ATTENDANCE_STATUSES }
   };
 
-  const [summaryRows, dailyRows] = await Promise.all([
+  const [summaryRows, dailyRows, calculated] = await Promise.all([
     Attendance.aggregate([
       { $match: match },
       {
@@ -103,7 +143,10 @@ const getAttendanceStats = async (startDate, endDate) => {
       { $match: match },
       {
         $group: {
-          _id: { $dayOfMonth: '$date' },
+          _id: { $dateToString: {
+            format: '%Y-%m-%d', date: '$date',
+            timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC'
+          } },
           present: {
             $sum: { $cond: [{ $eq: ['$status', ATTENDANCE_STATUS.PRESENT] }, 1, 0] }
           },
@@ -116,7 +159,8 @@ const getAttendanceStats = async (startDate, endDate) => {
         }
       },
       { $sort: { _id: 1 } }
-    ])
+    ]),
+    countCalculatedAbsences(startDate, endDate)
   ]);
 
   const byStatus = {};
@@ -135,10 +179,32 @@ const getAttendanceStats = async (startDate, endDate) => {
     totalWorkHours += row.totalWorkHours || 0;
   }
 
+  const storedRecords = totalRecords;
+  absentCount += calculated.total;
+  totalRecords += calculated.total;
+
+  const summary = summaryRows.map((row) => ({ ...row }));
+  if (calculated.total > 0) {
+    const absentRow = summary.find((row) => row._id === ATTENDANCE_STATUS.ABSENT);
+    if (absentRow) absentRow.count += calculated.total;
+    else summary.push({ _id: ATTENDANCE_STATUS.ABSENT, count: calculated.total, totalWorkHours: 0 });
+  }
+
+  const dailyMap = new Map(dailyRows.map((row) => [row._id, { ...row }]));
+  for (const [date, count] of Object.entries(calculated.byDate)) {
+    const row = dailyMap.get(date) || { _id: date, present: 0, late: 0, absent: 0 };
+    row.absent += count;
+    dailyMap.set(date, row);
+  }
+  const daily = [...dailyMap.values()].sort((a, b) => String(a._id).localeCompare(String(b._id)))
+    .map((row) => /^\d{4}-\d{2}-\d{2}$/.test(String(row._id))
+      ? { ...row, date: row._id, _id: Number(row._id.slice(8)) }
+      : row);
+
   return {
     // Kept for backward compatibility with the previous response shape.
-    summary: summaryRows,
-    daily: dailyRows,
+    summary,
+    daily,
     // New explicit counters.
     counts: {
       present: presentCount,
@@ -147,6 +213,8 @@ const getAttendanceStats = async (startDate, endDate) => {
       total: totalRecords
     },
     totalRecords,
+    storedRecords,
+    calculatedAbsences: calculated.total,
     onTimeRate: percentage(presentCount, totalRecords),
     lateRate: percentage(lateCount, totalRecords),
     absentRate: percentage(absentCount, totalRecords),
@@ -166,9 +234,9 @@ const getAttendanceStats = async (startDate, endDate) => {
  * @param {number} year
  * @returns {Promise<Object>}
  */
-const getLeaveStats = async (startDate, endDate, month, year) => {
-  const periodStart = new Date(year, month - 1, 1, 0, 0, 0, 0);
-  const periodEnd = new Date(year, month, 0, 23, 59, 59, 999);
+const getLeaveStats = async (startDate, endDate, month, year, explicitOverlapRange = null) => {
+  const periodStart = explicitOverlapRange?.startDate || new Date(year, month - 1, 1, 0, 0, 0, 0);
+  const periodEnd = explicitOverlapRange?.endDate || new Date(year, month, 0, 23, 59, 59, 999);
 
   // Leaves overlapping the period.
   const overlapMatch = {
@@ -182,7 +250,7 @@ const getLeaveStats = async (startDate, endDate, month, year) => {
     createdAt: { $gte: startDate, $lte: endDate }
   };
 
-  const [overlapRows, pendingCount, createdCount, byType, byStatus, byMonth] =
+  const [overlapRows, pendingCount, createdCount, byType, byStatus, byYearMonth] =
     await Promise.all([
       Leave.aggregate([
         { $match: overlapMatch },
@@ -194,10 +262,7 @@ const getLeaveStats = async (startDate, endDate, month, year) => {
           }
         }
       ]),
-      Leave.countDocuments({
-        status: LEAVE_STATUS.PENDING,
-        createdAt: { $gte: startDate, $lte: endDate }
-      }),
+      Leave.countDocuments({ status: LEAVE_STATUS.PENDING }),
       Leave.countDocuments(createdMatch),
       Leave.aggregate([
         { $match: createdMatch },
@@ -217,7 +282,9 @@ const getLeaveStats = async (startDate, endDate, month, year) => {
         { $match: createdMatch },
         {
           $group: {
-            _id: { $month: '$startDate' },
+            _id: { $dateToString: {
+              format: '%Y-%m', date: '$startDate', timezone: 'UTC'
+            } },
             count: { $sum: 1 },
             totalDays: { $sum: '$numberOfDays' }
           }
@@ -236,12 +303,23 @@ const getLeaveStats = async (startDate, endDate, month, year) => {
     (sum, r) => sum + (r.leaveCount || 0),
     0
   );
+  const monthlyTotals = new Map();
+  for (const row of byYearMonth) {
+    const monthNumber = Number(String(row._id).slice(5));
+    const current = monthlyTotals.get(monthNumber) || { _id: monthNumber, count: 0, totalDays: 0 };
+    current.count += row.count;
+    current.totalDays += row.totalDays || 0;
+    monthlyTotals.set(monthNumber, current);
+  }
+  const byMonth = [...monthlyTotals.values()].sort((a, b) => a._id - b._id);
 
   return {
     // Kept for backward compatibility.
     byType,
     byStatus,
     byMonth,
+    byYearMonth,
+    approvedOverlapPeriod: { startDate: periodStart, endDate: periodEnd },
     // New explicit metrics.
     employeesOnLeave,
     approvedLeaveRecords: totalApprovedLeaveRecords,
@@ -328,115 +406,17 @@ const getTaskStats = async (filter) => {
 /**
  * Performance trend over weeks or months.
  *
- * Buckets come from real events only: completedAt for completions and
- * createdAt for creation. Periods without activity are not fabricated.
+ * Buckets come from recorded status events. Periods without activity are not fabricated.
  *
  * @param {Object} filter - Mongo filter from buildTaskFilter
  * @param {string} periodType - 'week' | 'month'
  * @returns {Promise<Array<Object>>}
  */
 const getPerformanceTrend = async (filter, periodType, startDate, endDate) => {
-  const bucketFormat =
-    periodType === 'week'
-      ? { $dateToString: { format: '%Y-%m-%d', date: '$date' } }
-      : { $dateToString: { format: '%Y-%m', date: '$date' } };
-
-  // Completed buckets are keyed on the real completion timestamp.
-  const completedFilter = {
-    ...filter,
-    status: TASK_STATUS.DONE,
-    completedAt: { $ne: null }
-  };
-  if (startDate || endDate) {
-    completedFilter.completedAt = {};
-    if (startDate) completedFilter.completedAt.$gte = startDate;
-    if (endDate) completedFilter.completedAt.$lte = endDate;
-  }
-
-  // Created buckets are keyed on the real creation timestamp.
-  const createdFilter = { ...filter };
-  if (startDate || endDate) {
-    createdFilter.createdAt = {};
-    if (startDate) createdFilter.createdAt.$gte = startDate;
-    if (endDate) createdFilter.createdAt.$lte = endDate;
-  }
-
-  const [completedRows, createdRows] = await Promise.all([
-    Task.aggregate([
-      { $match: completedFilter },
-      {
-        $group: {
-          _id: {
-            $dateToString: {
-              format: periodType === 'week' ? '%Y-%m-%d' : '%Y-%m',
-              date: '$completedAt'
-            }
-          },
-          completed: { $sum: 1 },
-          // Count only tasks that have BOTH dates, so the on-time denominator
-          // excludes completions without a dueDate.
-          withDueDate: {
-            $sum: { $cond: [{ $ne: ['$dueDate', null] }, 1, 0] }
-          },
-          onTime: {
-            $sum: {
-              $cond: [
-                {
-                  $and: [
-                    { $ne: ['$dueDate', null] },
-                    { $lte: ['$completedAt', '$dueDate'] }
-                  ]
-                },
-                1,
-                0
-              ]
-            }
-          }
-        }
-      },
-      { $sort: { _id: 1 } }
-    ]),
-    Task.aggregate([
-      { $match: createdFilter },
-      {
-        $group: {
-          _id: {
-            $dateToString: {
-              format: periodType === 'week' ? '%Y-%m-%d' : '%Y-%m',
-              date: '$createdAt'
-            }
-          },
-          total: { $sum: 1 }
-        }
-      },
-      { $sort: { _id: 1 } }
-    ])
-  ]);
-
-  const completedMap = new Map(completedRows.map((r) => [r._id, r]));
-  const createdMap = new Map(createdRows.map((r) => [r._id, r]));
-
-  const keys = Array.from(
-    new Set([...completedMap.keys(), ...createdMap.keys()])
-  ).sort();
-
-  return keys.map((key) => {
-    const completed = completedMap.get(key);
-    const created = createdMap.get(key);
-    const totalTasks = created?.total || 0;
-    const completedTasks = completed?.completed || 0;
-    const onTimeTasks = completed?.onTime || 0;
-    const withDueDate = completed?.withDueDate || 0;
-    return {
-      period: key,
-      label: key,
-      totalTasks,
-      completedTasks,
-      completionRate: percentage(completedTasks, totalTasks),
-      onTimeTasks,
-      onTimeRate: percentage(onTimeTasks, withDueDate)
-    };
-  });
+  return getTaskEventTrend({
+    teamId: filter.teamId,
+    employeeId: filter.assignedTo
+  }, periodType, startDate, endDate);
 };
 
 module.exports = {

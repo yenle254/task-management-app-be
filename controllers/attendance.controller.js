@@ -1,6 +1,7 @@
 const Attendance = require('../models/attendance.model');
 const attendanceService = require('../services/attendance.service');
 const User = require('../models/user.model');
+const { parseDate, normalizeRange } = require('../utils/dashboard.helper');
 
 
 /**
@@ -140,13 +141,14 @@ const getMyAttendance = async (req, res) => {
         let finalRecords = [];
         
         if (startDate && endDate) {
-            const start = new Date(startDate);
-            const end = new Date(endDate);
+            const start = parseDate(startDate);
+            const end = parseDate(endDate);
             
-            if (!isNaN(start.getTime()) && !isNaN(end.getTime())) {
+            if (start && end) {
+                const range = normalizeRange(start, end);
                 query.date = {
-                    $gte: start,  
-                    $lte: end     
+                    $gte: range.startDate,
+                    $lte: range.endDate
                 };
                 
                 // Get actual attendance records

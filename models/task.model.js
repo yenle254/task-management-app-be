@@ -30,7 +30,8 @@ const StatusHistorySchema = new mongoose.Schema({
     // completion stays attributed to the team and assignees that held it then,
     // even if the task is later reassigned.
     teamId: { type: mongoose.Schema.Types.ObjectId, ref: 'Team', default: null },
-    assignedTo: [{ type: mongoose.Schema.Types.ObjectId, ref: 'User' }]
+    assignedTo: [{ type: mongoose.Schema.Types.ObjectId, ref: 'User' }],
+    dueDate: { type: Date, default: null }
 }, { _id: false });
 
 const TaskSchema = new mongoose.Schema({
@@ -55,16 +56,14 @@ const TaskSchema = new mongoose.Schema({
     tags: [String],
 }, {
     timestamps: true,
-    collection: 'tasks',
-    // Composite indexes for common query patterns
-    indexes: [
-        { assignedTo: 1, status: 1 },                    // getMyTasks
-        { teamId: 1, status: 1 },                      // getTeamTasks
-        { status: 1, dueDate: 1 },                     // overdue tasks
-        { assignedTo: 1, status: 1, dueDate: 1 },      // overdue + user filter
-        { teamId: 1, completedAt: 1 }                  // team performance by completion
-    ]
+    collection: 'tasks'
 });
+
+TaskSchema.index({ assignedTo: 1, status: 1 });
+TaskSchema.index({ teamId: 1, status: 1 });
+TaskSchema.index({ status: 1, dueDate: 1 });
+TaskSchema.index({ assignedTo: 1, status: 1, dueDate: 1 });
+TaskSchema.index({ 'statusHistory.at': 1 });
 
 
 /**
@@ -141,14 +140,19 @@ TaskSchema.pre('save', function(next) {
                     ? lastEntry.to
                     : 'todo';
 
-    if (this.isModified('status') && previousStatus !== this.status) {
+    const initialSave = this.isNew && !lastEntry &&
+        this.$locals.previousStatus === undefined &&
+        this.$locals.loadedStatus === undefined;
+
+    if (initialSave || (this.isModified('status') && previousStatus !== this.status)) {
         this.statusHistory.push({
-            from: previousStatus,
+            from: initialSave ? null : previousStatus,
             to: this.status,
-            at: new Date(),
+            at: initialSave ? (this.createdAt || new Date()) : new Date(),
             by: this.$locals.statusChangedBy || null,
             teamId: this.teamId || null,
-            assignedTo: this.assignedTo || []
+            assignedTo: this.assignedTo || [],
+            dueDate: this.dueDate || null
         });
 
         // Advance the recorded previous status so the same transition is never

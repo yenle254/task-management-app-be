@@ -13,14 +13,13 @@ const LeaveSchema = new mongoose.Schema({
     rejectionReason: { type: String }
 }, {
     timestamps: true,
-    collection: 'leaves',
-    indexes: [
-        { userId: 1, status: 1 },           // getMyLeaves, getPendingLeaves
-        { userId: 1, startDate: 1 },       // Year filter for leave balance
-        { status: 1, createdAt: -1 },      // Sort pending leaves
-        { status: 1, startDate: 1, endDate: 1 }  // Approved leave overlapping a period
-    ]
+    collection: 'leaves'
 });
+
+LeaveSchema.index({ userId: 1, status: 1 });
+LeaveSchema.index({ userId: 1, startDate: 1 });
+LeaveSchema.index({ status: 1, createdAt: -1 });
+LeaveSchema.index({ status: 1, startDate: 1, endDate: 1 });
 
 
 module.exports = mongoose.model('Leave', LeaveSchema);

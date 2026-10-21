@@ -14,12 +14,11 @@ const AttendanceSchema = new mongoose.Schema({
     autoClockOut: { type: Boolean, default: false }
 }, {
     timestamps: true,
-    collection: 'attendances',
-    indexes: [
-        { userId: 1, date: 1 },           // Clock-in check (unique per user per day)
-        { userId: 1, date: -1 }            // User attendance history
-    ]
+    collection: 'attendances'
 });
+
+AttendanceSchema.index({ userId: 1, date: 1 });
+AttendanceSchema.index({ userId: 1, date: -1 });
 
 
 module.exports = mongoose.model('Attendance', AttendanceSchema);

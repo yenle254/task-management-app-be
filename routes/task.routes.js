@@ -14,7 +14,6 @@ const {
   assignTask,
   updateTaskStatus,
   updateTaskProgress,
-  getMyTasks,
   getTeamTasks,
   addComment,
   getOverdueTasks,
@@ -27,6 +26,7 @@ const {
   deleteSubtask,
   getSubtasks
 } = require('../controllers/task.controller');
+const getMyTasks = require('../controllers/my-tasks.controller');
 const { getTeamOverdue } = require('../controllers/team-dashboard.controller');
 const {
   createTaskValidation,

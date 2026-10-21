@@ -183,7 +183,10 @@ describe('dashboard.helper', () => {
       const start = new Date('2025-01-01');
       const end = new Date('2025-01-31');
       applyDateFilter(query, 'createdAt', start, end);
-      expect(query.createdAt).toEqual({ $gte: start, $lte: end });
+      expect(query.createdAt).toEqual({
+        $gte: start,
+        $lte: new Date(2025, 0, 31, 23, 59, 59, 999)
+      });
     });
 
     test('applies a single bound', () => {

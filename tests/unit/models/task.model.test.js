@@ -8,6 +8,11 @@ const Task = require('../../../models/task.model');
  * tests need no database connection.
  */
 describe('Task model status history', () => {
+    test('declares an index for recorded event dates', () => {
+        expect(Task.schema.indexes().some(([fields]) =>
+            fields['statusHistory.at'] === 1
+        )).toBe(true);
+    });
     const buildTask = (overrides = {}) => {
         const task = new Task({
             title: 'A task',
@@ -41,6 +46,18 @@ describe('Task model status history', () => {
     };
 
     describe('pre-save hook', () => {
+        test('records creation with the initial team, assignees and due date', async () => {
+            const dueDate = new Date('2025-04-30T12:00:00Z');
+            const task = buildTask({ dueDate });
+
+            await runSaveHooks(task);
+
+            expect(task.statusHistory).toHaveLength(1);
+            expect(task.statusHistory[0]).toMatchObject({ from: null, to: 'todo', dueDate });
+            expect(task.statusHistory[0].teamId.toString()).toBe(task.teamId.toString());
+            expect(task.statusHistory[0].assignedTo[0].toString()).toBe(task.assignedTo[0].toString());
+        });
+
         test('records a transition when the status changes', async () => {
             const task = buildTask({ status: 'todo' });
             task.$locals.previousStatus = 'todo';

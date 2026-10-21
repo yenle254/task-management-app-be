@@ -1,6 +1,7 @@
 const User = require('../models/user.model');
 const Attendance = require('../models/attendance.model');
 const { validateLocation: validateOfficeLocation } = require('./office.service');
+const { parseDate, normalizeRange } = require('../utils/dashboard.helper');
 
 
 /**
@@ -96,11 +97,12 @@ const getAttendanceStats = async (userId, startDate, endDate) => {
     
     // Only add date filter if dates are provided and valid
     if (startDate && endDate) {
-        const start = new Date(startDate);
-        const end = new Date(endDate);
+        const start = parseDate(startDate);
+        const end = parseDate(endDate);
         
-        if (!isNaN(start.getTime()) && !isNaN(end.getTime())) {
-            query.date = { $gte: start, $lte: end };
+        if (start && end) {
+            const range = normalizeRange(start, end);
+            query.date = { $gte: range.startDate, $lte: range.endDate };
             // Calculate working days in range
             const workingDays = getWorkingDays(start, end);
             workingDaysCount = workingDays.length;

@@ -112,10 +112,10 @@ describe('errorHandler middleware - logging behavior', () => {
     errorHandler(err, req, res, jest.fn());
 
     const body = res.json.mock.calls[0][0];
-    expect(body).toEqual({ success: false, error: 'Resource not found' });
+    expect(body).toEqual({ success: false, error: 'Internal server error' });
   });
 
-  test('preserves dev-only stack field in response when NODE_ENV=development', () => {
+  test('does not expose internal details in development', () => {
     process.env.NODE_ENV = 'development';
     const err = new Error('dev error');
     const req = { method: 'GET', originalUrl: '/x', path: '/x', requestId: 'r' };
@@ -129,7 +129,7 @@ describe('errorHandler middleware - logging behavior', () => {
     errorHandler(err, req, res, jest.fn());
 
     const body = res.json.mock.calls[0][0];
-    expect(body).toHaveProperty('stack');
+    expect(body).toEqual({ success: false, error: 'Internal server error' });
   });
 
   test('does not log a second time when response already sent', () => {

@@ -3,6 +3,7 @@ const User = require('../models/user.model');
 const Task = require('../models/task.model');
 const Leave = require('../models/leave.model');
 const Team = require('../models/team.model');
+const { TASK_STATUS, TASK_PRIORITY } = require('../utils/constants.utils');
 const statisticsService = require('../services/statistics.service');
 const {
   validateDateRange,
@@ -40,8 +41,18 @@ const getOverviewStats = async (req, res) => {
 // Employees by department statistics
 const getEmployeesByDepartment = async (req, res) => {
   try {
+    const { teamId, employeeId } = req.query;
+    if (teamId && !mongoose.isValidObjectId(teamId)) {
+      return res.status(400).json({ success: false, error: 'Invalid teamId' });
+    }
+    if (employeeId && !mongoose.isValidObjectId(employeeId)) {
+      return res.status(400).json({ success: false, error: 'Invalid employeeId' });
+    }
+    const userMatch = { isActive: true };
+    if (teamId) userMatch.teamId = new mongoose.Types.ObjectId(teamId);
+    if (employeeId) userMatch._id = new mongoose.Types.ObjectId(employeeId);
     const stats = await User.aggregate([
-      { $match: { isActive: true } },
+      { $match: userMatch },
       {
         $group: {
           _id: "$profile.department",
@@ -77,6 +88,9 @@ const getAttendanceStats = async (req, res) => {
     if (!rangeCheck.valid) {
       return res.status(400).json({ success: false, error: rangeCheck.error });
     }
+    if (Boolean(startDate) !== Boolean(endDate)) {
+      return res.status(400).json({ success: false, error: 'Both startDate and endDate are required' });
+    }
 
     const myCheck = validateMonthYear(month, year);
     if (!myCheck.valid) {
@@ -109,9 +123,12 @@ const getAttendanceStats = async (req, res) => {
           endDate: range.endDate,
           month: myCheck.month,
           year: myCheck.year,
+          source: startDate && endDate ? 'explicit' : 'month',
         },
         counts: stats.counts,
         totalRecords: stats.totalRecords,
+        storedRecords: stats.storedRecords,
+        calculatedAbsences: stats.calculatedAbsences,
         onTimeRate: stats.onTimeRate,
         lateRate: stats.lateRate,
         absentRate: stats.absentRate,
@@ -127,8 +144,8 @@ const getAttendanceStats = async (req, res) => {
  * Leave statistics for a month/year.
  *
  * `employeesOnLeave` counts DISTINCT users whose approved leave overlaps the
- * selected month. `pendingLeaves` counts pending requests created in the
- * period; `createdLeaves` counts every request created in the period.
+ * selected month or explicit range. `pendingLeaves` counts currently pending
+ * requests; `createdLeaves` counts every request created in the period.
  */
 const getLeaveStats = async (req, res) => {
   try {
@@ -137,6 +154,9 @@ const getLeaveStats = async (req, res) => {
     const rangeCheck = validateDateRange(startDate, endDate);
     if (!rangeCheck.valid) {
       return res.status(400).json({ success: false, error: rangeCheck.error });
+    }
+    if (Boolean(startDate) !== Boolean(endDate)) {
+      return res.status(400).json({ success: false, error: 'Both startDate and endDate are required' });
     }
 
     const myCheck = validateMonthYear(month, year);
@@ -157,7 +177,8 @@ const getLeaveStats = async (req, res) => {
       range.startDate,
       range.endDate,
       myCheck.month,
-      myCheck.year
+      myCheck.year,
+      startDate && endDate ? range : null
     );
 
     res.json({
@@ -167,12 +188,15 @@ const getLeaveStats = async (req, res) => {
         byType: stats.byType,
         byStatus: stats.byStatus,
         byMonth: stats.byMonth,
+        byYearMonth: stats.byYearMonth,
+        approvedOverlapPeriod: stats.approvedOverlapPeriod,
         // New fields.
         period: {
           startDate: range.startDate,
           endDate: range.endDate,
           month: myCheck.month,
           year: myCheck.year,
+          source: startDate && endDate ? 'explicit' : 'year',
         },
         employeesOnLeave: stats.employeesOnLeave,
         approvedLeaveRecords: stats.approvedLeaveRecords,
@@ -207,6 +231,12 @@ const getTaskStats = async (req, res) => {
         success: false,
         error: "Invalid employeeId",
       });
+    }
+    if (status && (typeof status !== 'string' || !Object.values(TASK_STATUS).includes(status) || status === TASK_STATUS.DELETED)) {
+      return res.status(400).json({ success: false, error: 'Invalid status' });
+    }
+    if (priority && (typeof priority !== 'string' || !Object.values(TASK_PRIORITY).includes(priority))) {
+      return res.status(400).json({ success: false, error: 'Invalid priority' });
     }
 
     // Verify the employee exists so the filter cannot silently match nothing.
@@ -256,7 +286,7 @@ const getTaskStats = async (req, res) => {
 /**
  * Performance trends over weeks or months.
  *
- * Buckets are built from real events (completedAt / createdAt). No synthetic
+ * Buckets are built from recorded status events. No synthetic
  * history is generated for periods without activity.
  */
 const getPerformanceTrends = async (req, res) => {
@@ -271,6 +301,9 @@ const getPerformanceTrends = async (req, res) => {
     const rangeCheck = validateDateRange(startDate, endDate);
     if (!rangeCheck.valid) {
       return res.status(400).json({ success: false, error: rangeCheck.error });
+    }
+    if (Boolean(startDate) !== Boolean(endDate)) {
+      return res.status(400).json({ success: false, error: 'Both startDate and endDate are required' });
     }
 
     if (teamId && !mongoose.isValidObjectId(teamId)) {
@@ -334,29 +367,58 @@ const getPerformanceTrends = async (req, res) => {
 // Team performance statistics
 const getTeamPerformance = async (req, res) => {
   try {
-    const teams = await Team.find().populate("leaderId", "profile.fullName");
+    const { teamId, employeeId, startDate, endDate } = req.query;
+    const rangeCheck = validateDateRange(startDate, endDate);
+    if (!rangeCheck.valid) {
+      return res.status(400).json({ success: false, error: rangeCheck.error });
+    }
+    if (teamId && !mongoose.isValidObjectId(teamId)) {
+      return res.status(400).json({ success: false, error: 'Invalid teamId' });
+    }
+    if (employeeId && !mongoose.isValidObjectId(employeeId)) {
+      return res.status(400).json({ success: false, error: 'Invalid employeeId' });
+    }
 
-    const performance = await Promise.all(
-      teams.map(async (team) => {
-        const [totalTasks, completedTasks, memberCount] = await Promise.all([
-          Task.countDocuments({ teamId: team._id, status: { $ne: "deleted" } }),
-          Task.countDocuments({ teamId: team._id, status: "done" }),
-          User.countDocuments({ teamId: team._id, isActive: true }),
-        ]);
+    const teams = await Team.find(teamId ? { _id: teamId } : {})
+      .populate("leaderId", "profile.fullName");
 
-        return {
-          teamName: team.name,
-          leader: team.leaderId?.profile?.fullName || "N/A",
-          memberCount,
-          totalTasks,
-          completedTasks,
-          completionRate:
-            totalTasks > 0
-              ? Math.round((completedTasks / totalTasks) * 100)
-              : 0,
-        };
-      })
-    );
+    const teamIds = teams.map((team) => team._id);
+    const taskFilter = statisticsService.buildTaskFilter({
+      employeeId,
+      startDate: parseDate(startDate),
+      endDate: parseDate(endDate)
+    });
+    taskFilter.teamId = { $in: teamIds };
+    const [taskRows, memberRows] = teamIds.length === 0 ? [[], []] : await Promise.all([
+      Task.aggregate([
+        { $match: taskFilter },
+        { $group: { _id: { teamId: '$teamId', status: '$status' }, count: { $sum: 1 } } }
+      ]),
+      User.aggregate([
+        { $match: { teamId: { $in: teamIds }, isActive: true } },
+        { $group: { _id: '$teamId', count: { $sum: 1 } } }
+      ])
+    ]);
+    const taskCounts = new Map();
+    for (const row of taskRows) {
+      const key = row._id.teamId.toString();
+      const counts = taskCounts.get(key) || { total: 0, done: 0 };
+      counts.total += row.count;
+      if (row._id.status === TASK_STATUS.DONE) counts.done += row.count;
+      taskCounts.set(key, counts);
+    }
+    const memberCounts = new Map(memberRows.map((row) => [row._id.toString(), row.count]));
+    const performance = teams.map((team) => {
+      const counts = taskCounts.get(team._id.toString()) || { total: 0, done: 0 };
+      return {
+        teamName: team.name,
+        leader: team.leaderId?.profile?.fullName || "N/A",
+        memberCount: memberCounts.get(team._id.toString()) || 0,
+        totalTasks: counts.total,
+        completedTasks: counts.done,
+        completionRate: counts.total > 0 ? Math.round((counts.done / counts.total) * 100) : 0,
+      };
+    });
 
     res.json({
       success: true,

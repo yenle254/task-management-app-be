@@ -206,11 +206,11 @@ describe('team-dashboard.service', () => {
 
             mockTasks([
                 // Completed before the deadline -> on time.
-                { status: 'done', dueDate: future, completedAt: now, createdAt: past, assignedTo: [leaderId] },
+                { status: 'done', dueDate: past, completedAt: now, statusHistory: [{ to: 'done', at: now, dueDate: future }], createdAt: past, assignedTo: [leaderId] },
                 // Completed after the deadline -> late.
-                { status: 'done', dueDate: past, completedAt: now, createdAt: past, assignedTo: [leaderId] },
+                { status: 'done', dueDate: past, completedAt: now, statusHistory: [{ to: 'done', at: now, dueDate: past }], createdAt: past, assignedTo: [leaderId] },
                 // No dueDate -> excluded from the on-time denominator.
-                { status: 'done', dueDate: null, completedAt: now, createdAt: past, assignedTo: [leaderId] }
+                { status: 'done', dueDate: null, completedAt: now, statusHistory: [{ to: 'done', at: now, dueDate: null }], createdAt: past, assignedTo: [leaderId] }
             ]);
 
             const progress = await getTeamMemberProgress(team);
@@ -265,6 +265,7 @@ describe('team-dashboard.service', () => {
             expect(perf.completionRate).toBe(0);
             expect(perf.overdueRate).toBe(0);
             expect(perf.onTimeRate).toBe(0);
+            expect(perf.mostLoadedMember).toBeNull();
         });
 
         test('counts tasks per status and computes the completion rate', async () => {
@@ -316,6 +317,37 @@ describe('team-dashboard.service', () => {
     });
 
     describe('getTeamOverdueTasks()', () => {
+        test('sorts before slicing page 2 and retains the response fields', async () => {
+            const now = Date.now();
+            const makeTask = (title, days) => ({
+                _id: new mongoose.Types.ObjectId(), title, status: 'todo', priority: 'high',
+                dueDate: new Date(now - days * 86400000), assignedTo: [memberId],
+                assignedBy: leaderId, teamId
+            });
+            const newest = makeTask('Newest', 1);
+            const rows = [newest, makeTask('Oldest', 9), makeTask('Middle', 5)];
+            const query = {
+                rows,
+                populate() { return this; },
+                sort(order) {
+                    expect(order).toEqual({ dueDate: 1 });
+                    this.rows.sort((a, b) => a.dueDate - b.dueDate);
+                    return this;
+                },
+                skip(value) { this.rows = this.rows.slice(value); return this; },
+                limit(value) { this.rows = this.rows.slice(0, value); return this; },
+                lean() { return Promise.resolve(this.rows); }
+            };
+            jest.spyOn(Task, 'countDocuments').mockResolvedValue(3);
+            jest.spyOn(Task, 'find').mockReturnValue(query);
+            const result = await getTeamOverdueTasks(team, 2, 2);
+            expect(result.tasks.map((task) => task.title)).toEqual(['Newest']);
+            expect(result.tasks[0]).toEqual(expect.objectContaining({
+                _id: newest._id, title: 'Newest', status: 'todo', priority: 'high',
+                dueDate: newest.dueDate, assignedTo: [memberId]
+            }));
+            expect(result.pagination).toEqual({ page: 2, limit: 2, total: 3, pages: 2 });
+        });
         test('sorts the most overdue task first and reports days overdue', async () => {
             const now = Date.now();
             const oldest = new Date(now - 10 * 24 * 60 * 60 * 1000);

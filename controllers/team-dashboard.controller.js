@@ -111,11 +111,19 @@ const getTeamOverdue = async (req, res) => {
       limit = PAGINATION.DEFAULT_LIMIT
     } = req.query;
 
-    const parsedPage = Math.max(parseInt(page) || 1, 1);
-    const parsedLimit = Math.min(
-      Math.max(parseInt(limit) || PAGINATION.DEFAULT_LIMIT, 1),
-      PAGINATION.MAX_LIMIT
-    );
+    const parsePositiveInteger = (value) => {
+      if (!/^\d+$/.test(String(value))) return null;
+      const parsed = Number(value);
+      return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : null;
+    };
+    const parsedPage = parsePositiveInteger(page);
+    const parsedLimit = parsePositiveInteger(limit);
+    if (parsedPage === null || parsedLimit === null || parsedLimit > PAGINATION.MAX_LIMIT) {
+      return res.status(400).json({
+        success: false,
+        error: `page must be a positive integer and limit must be between 1 and ${PAGINATION.MAX_LIMIT}`
+      });
+    }
 
     const access = await resolveAccessibleTeam(req.user, teamId);
     if (!access.ok) {
