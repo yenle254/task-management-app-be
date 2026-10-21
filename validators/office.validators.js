@@ -2,6 +2,7 @@
  * Office Validators
  */
 const { body, param } = require('express-validator');
+const { OFFICE } = require('../utils/constants.utils');
 
 const createOfficeValidation = [
   body('name')
@@ -24,7 +25,8 @@ const createOfficeValidation = [
 
   body('radius')
     .optional()
-    .isInt({ min: 10, max: 1000 }).withMessage('Radius must be between 10 and 1000 meters'),
+    .isInt({ min: OFFICE.MIN_RADIUS, max: OFFICE.MAX_RADIUS })
+    .withMessage(`Radius must be between ${OFFICE.MIN_RADIUS} and ${OFFICE.MAX_RADIUS} meters`),
 
   body('workingHours.start')
     .optional()
@@ -63,7 +65,8 @@ const updateOfficeValidation = [
 
   body('radius')
     .optional()
-    .isInt({ min: 10, max: 1000 }).withMessage('Radius must be between 10 and 1000 meters'),
+    .isInt({ min: OFFICE.MIN_RADIUS, max: OFFICE.MAX_RADIUS })
+    .withMessage(`Radius must be between ${OFFICE.MIN_RADIUS} and ${OFFICE.MAX_RADIUS} meters`),
 
   body('workingHours.start')
     .optional()

@@ -1,6 +1,7 @@
 const Leave = require('../models/leave.model');
 const User = require('../models/user.model');
 const leaveService = require('../services/leave.service');
+const { USER_ROLES, LEAVE_STATUS } = require('../utils/constants.utils');
 const {
   notifyLeaveApproved,
   notifyLeaveRejected,
@@ -44,7 +45,7 @@ const submitLeave = async (req, res) => {
             endDate,
             numberOfDays,
             reason,
-            status: 'pending'
+            status: LEAVE_STATUS.PENDING
         });
 
         await leave.populate('userId', 'email profile');
@@ -178,8 +179,8 @@ const getLeaveById = async (req, res) => {
 
         const canView = 
             leave.userId._id.toString() === req.user._id.toString() ||
-            req.user.role === 'hr_manager' ||
-            (req.user.role === 'team_lead' && 
+            req.user.role === USER_ROLES.HR_MANAGER ||
+            (req.user.role === USER_ROLES.TEAM_LEAD && 
              leave.userId.teamId?.toString() === req.user.teamId?.toString());
 
         if (!canView) {
@@ -211,7 +212,7 @@ const getLeaveStatistics = async (req, res) => {
         let query = {};
 
         // Team lead sees only their team's leaves
-        if (req.user.role === 'team_lead') {
+        if (req.user.role === USER_ROLES.TEAM_LEAD) {
             const teamMembers = await User.find({ 
                 teamId: req.user.teamId 
             }).select('_id');
@@ -226,9 +227,9 @@ const getLeaveStatistics = async (req, res) => {
             .sort({ createdAt: -1 });
 
         const stats = {
-            pending: leaves.filter(l => l.status === 'pending').length,
-            approved: leaves.filter(l => l.status === 'approved').length,
-            rejected: leaves.filter(l => l.status === 'rejected').length,
+            pending: leaves.filter(l => l.status === LEAVE_STATUS.PENDING).length,
+            approved: leaves.filter(l => l.status === LEAVE_STATUS.APPROVED).length,
+            rejected: leaves.filter(l => l.status === LEAVE_STATUS.REJECTED).length,
             total: leaves.length
         };
 
@@ -252,9 +253,9 @@ const getLeaveStatistics = async (req, res) => {
  */
 const getPendingLeaves = async (req, res) => {
     try {
-        let query = { status: 'pending' };
+        let query = { status: LEAVE_STATUS.PENDING };
 
-        if (req.user.role === 'team_lead') {
+        if (req.user.role === USER_ROLES.TEAM_LEAD) {
             const teamMembers = await User.find({ 
                 teamId: req.user.teamId 
             }).select('_id');
@@ -297,7 +298,7 @@ const approveLeave = async (req, res) => {
             });
         }
 
-        if (leave.status !== 'pending') {
+        if (leave.status !== LEAVE_STATUS.PENDING) {
             return res.status(400).json({
                 success: false,
                 error: `Leave request already ${leave.status}`
@@ -360,7 +361,7 @@ const rejectLeave = async (req, res) => {
             });
         }
 
-        if (leave.status !== 'pending') {
+        if (leave.status !== LEAVE_STATUS.PENDING) {
             return res.status(400).json({
                 success: false,
                 error: `Leave request already ${leave.status}`
@@ -422,7 +423,7 @@ const cancelLeave = async (req, res) => {
             });
         }
 
-        if (leave.status !== 'pending') {
+        if (leave.status !== LEAVE_STATUS.PENDING) {
             return res.status(400).json({
                 success: false,
                 error: 'Only pending leave requests can be cancelled'
@@ -490,7 +491,7 @@ const getTeamLeaves = async (req, res) => {
         const { teamId } = req.params;
         const { status, month, year = new Date().getFullYear() } = req.query;
 
-        if (req.user.role === 'team_lead' && req.user.teamId?.toString() !== teamId) {
+        if (req.user.role === USER_ROLES.TEAM_LEAD && req.user.teamId?.toString() !== teamId) {
             return res.status(403).json({
                 success: false,
                 error: 'Not authorized to view this team\'s leaves'

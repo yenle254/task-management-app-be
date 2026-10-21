@@ -48,9 +48,44 @@ const dateHelper = {
      */
     daysUntil: (dueDate) => {
       const today = dateHelper.startOfDay();
-      const due = dateHelper.startOfDay(dueDate);
+      const due = dateHelper.startOfDay(dateHelper.parseDateOnly(dueDate) || dueDate);
       const diffTime = due - today;
       return Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+    },
+
+    /**
+     * Parse a date-only string ("2025-01-01") as LOCAL midnight.
+     *
+     * `new Date('2025-01-01')` is defined by the language as UTC midnight, so
+     * in a timezone behind UTC it resolves to the previous local day. Date-only
+     * input therefore has to be split and constructed explicitly.
+     *
+     * @param {String|Date} value
+     * @returns {Date|null} Local midnight of the given day, or null if invalid
+     */
+    parseDateOnly: (value) => {
+      if (value === undefined || value === null || value === '') return null;
+
+      if (typeof value === 'string') {
+        const match = value.trim().match(/^(\d{4})-(\d{2})-(\d{2})$/);
+        if (match) {
+          const year = Number(match[1]);
+          const month = Number(match[2]);
+          const day = Number(match[3]);
+          const d = new Date(year, month - 1, day);
+          if (
+            d.getFullYear() !== year ||
+            d.getMonth() !== month - 1 ||
+            d.getDate() !== day
+          ) {
+            return null;
+          }
+          return d;
+        }
+      }
+
+      const d = new Date(value);
+      return isNaN(d.getTime()) ? null : d;
     },
   
     /**

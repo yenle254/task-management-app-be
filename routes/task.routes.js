@@ -27,6 +27,7 @@ const {
   deleteSubtask,
   getSubtasks
 } = require('../controllers/task.controller');
+const { getTeamOverdue } = require('../controllers/team-dashboard.controller');
 const {
   createTaskValidation,
   updateTaskValidation,
@@ -64,6 +65,7 @@ router.post('/:id/comments', addCommentValidation, validateRequest, asyncHandler
 
 // Team tasks (should be after :id route to avoid conflicts)
 router.get('/team/:teamId', getTeamTasksValidation, validateRequest, asyncHandler(getTeamTasks));
+router.get('/team/:teamId/overdue', getTeamTasksValidation, validateRequest, asyncHandler(getTeamOverdue));
 router.post('/:id/attachments', uploadSingle, uploadErrorHandler, asyncHandler(addAttachment));
 router.post('/:id/attachments/bulk', uploadMultiple, uploadErrorHandler, asyncHandler(addAttachmentBulk));
 

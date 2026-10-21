@@ -16,9 +16,32 @@ const {
  */
 const register = async (req, res) => {
   try {
-    const { email, password, role, profile } = req.body;
+    const { email, password, profile } = req.body;
 
-    const existingUser = await User.findOne({ email });
+    // Whitelist only allowed fields - ignore any role/teamId/managerId/isActive from client
+    const allowedFields = {
+      email: email?.toLowerCase().trim(),
+      password: password,
+      profile: {
+        fullName: profile?.fullName?.trim(),
+        employeeId: profile?.employeeId?.trim(),
+        department: profile?.department || null,
+        position: profile?.position || null,
+        phone: profile?.phone || null,
+        avatar: null,
+      }
+    };
+
+    // Validate required fields
+    if (!allowedFields.email || !allowedFields.password || !allowedFields.profile.fullName || !allowedFields.profile.employeeId) {
+      return res.status(400).json({
+        success: false,
+        error: "Email, password, fullName, and employeeId are required"
+      });
+    }
+
+    // Check email uniqueness
+    const existingUser = await User.findOne({ email: allowedFields.email });
     if (existingUser) {
       return res.status(400).json({
         success: false,
@@ -26,20 +49,14 @@ const register = async (req, res) => {
       });
     }
 
-    const hashedPassword = await hashPassword(password);
+    const hashedPassword = await hashPassword(allowedFields.password);
 
+    // Hardcode role to employee - public registration always creates employee
     const user = await User.create({
-      email,
+      email: allowedFields.email,
       password: hashedPassword,
-      role: role || "employee",
-      profile: {
-        fullName: profile.fullName,
-        employeeId: profile.employeeId,
-        department: profile.department || null,
-        position: profile.position || null,
-        phone: profile.phone || null,
-        avatar: profile.avatar || null,
-      },
+      role: "employee", // Always employee, ignore any client-provided role
+      profile: allowedFields.profile,
       teamId: null,
       managerId: null,
       isActive: true,
@@ -231,8 +248,8 @@ const verifyOTP = async (req, res) => {
     user.resetPassword.otp = null;
     user.resetPassword.resetToken = resetToken;
     user.resetPassword.resetTokenExpires = new Date(
-      Date.now() + 15 * 60 * 1000
-    ); 
+      Date.now() + require('../utils/constants.utils').TIME.RESET_TOKEN_EXPIRY_MS
+    );
     await user.save();
 
     res.status(200).json({

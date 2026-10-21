@@ -20,7 +20,7 @@ const isOTPExpired = (expiresAt) => {
  * @returns {Date}
  */
 const getOTPExpireTime = () => {
-  return new Date(Date.now() + 10 * 60 * 1000); // 10 minutes
+  return new Date(Date.now() + require('./constants.utils').TIME.OTP_EXPIRY_MS);
 };
 
 module.exports = {

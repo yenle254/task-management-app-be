@@ -28,7 +28,7 @@ const getUsersValidation = [
 
   query('role')
     .optional()
-    .isIn(['hr_manager', 'team_lead', 'employee']).withMessage('Invalid role'),
+    .isIn(['system_admin', 'hr_manager', 'team_lead', 'employee']).withMessage('Invalid role'),
 
   query('department')
     .optional()
@@ -80,7 +80,7 @@ const updateUserValidation = [
 
   body('role')
     .optional()
-    .isIn(['hr_manager', 'team_lead', 'employee']).withMessage('Invalid role'),
+    .isIn(['system_admin', 'hr_manager', 'team_lead', 'employee']).withMessage('Invalid role'),
 
   body('teamId')
     .optional()

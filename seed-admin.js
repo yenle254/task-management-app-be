@@ -1,24 +1,33 @@
-/**
- * Quick seed script to create an admin account
- * Run: node seed-admin.js
- */
-
+require('dotenv').config();
 const mongoose = require('mongoose');
 const bcrypt = require('bcryptjs');
-require('dotenv').config();
-
 const User = require('./models/user.model');
 
+const {
+  SYSTEM_ADMIN_EMAIL,
+  SYSTEM_ADMIN_PASSWORD,
+  SYSTEM_ADMIN_FULLNAME,
+  SYSTEM_ADMIN_EMPLOYEE_ID,
+  SYSTEM_ADMIN_DEPARTMENT,
+  SYSTEM_ADMIN_POSITION,
+  SYSTEM_ADMIN_PHONE,
+} = process.env;
+
+if (!SYSTEM_ADMIN_EMAIL || !SYSTEM_ADMIN_PASSWORD) {
+  console.error('Missing required environment variables: SYSTEM_ADMIN_EMAIL, SYSTEM_ADMIN_PASSWORD');
+  process.exit(1);
+}
+
 const adminData = {
-  email: 'admin@tma.com',
-  password: 'Admin123!',
-  role: 'hr_manager',
+  email: SYSTEM_ADMIN_EMAIL,
+  password: SYSTEM_ADMIN_PASSWORD,
+  role: 'system_admin',
   profile: {
-    fullName: 'Admin User',
-    employeeId: 'ADMIN001',
-    department: 'Human Resources',
-    position: 'HR Manager',
-    phone: '0123456789',
+    fullName: SYSTEM_ADMIN_FULLNAME || 'System Administrator',
+    employeeId: SYSTEM_ADMIN_EMPLOYEE_ID || 'ADMIN001',
+    department: SYSTEM_ADMIN_DEPARTMENT || 'System Administration',
+    position: SYSTEM_ADMIN_POSITION || 'System Admin',
+    phone: SYSTEM_ADMIN_PHONE || null,
     avatar: null,
   },
   teamId: null,
@@ -29,34 +38,29 @@ const adminData = {
 
 async function seedAdmin() {
   try {
-    // Connect to MongoDB
     await mongoose.connect(process.env.MONGO_URL || 'mongodb://127.0.0.1:27017/tma_demo');
     console.log('Connected to MongoDB');
 
-    // Check if admin already exists
     const existingAdmin = await User.findOne({ email: adminData.email });
+
     if (existingAdmin) {
-      console.log('Admin account already exists:', adminData.email);
-      console.log('Password: Admin123!');
+      console.log('System Admin already exists:', adminData.email);
       await mongoose.disconnect();
       return;
     }
 
-    // Hash password
     const salt = await bcrypt.genSalt(10);
     const hashedPassword = await bcrypt.hash(adminData.password, salt);
 
-    // Create admin user
     const admin = new User({
       ...adminData,
       password: hashedPassword,
     });
 
     await admin.save();
-    console.log('Admin account created successfully!');
+    console.log('System Admin created successfully');
     console.log('Email:', adminData.email);
-    console.log('Password: Admin123!');
-    console.log('Role: HR Manager');
+    console.log('Role: system_admin');
 
     await mongoose.disconnect();
     console.log('Disconnected from MongoDB');

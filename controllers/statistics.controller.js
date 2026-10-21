@@ -1,8 +1,16 @@
-const User = require("../models/user.model");
-const Task = require("../models/task.model");
-const Attendance = require("../models/attendance.model");
-const Leave = require("../models/leave.model");
-const Team = require("../models/team.model");
+const mongoose = require('mongoose');
+const User = require('../models/user.model');
+const Task = require('../models/task.model');
+const Leave = require('../models/leave.model');
+const Team = require('../models/team.model');
+const statisticsService = require('../services/statistics.service');
+const {
+  validateDateRange,
+  validateMonthYear,
+  validatePeriod,
+  parseDate,
+  normalizeRange
+} = require('../utils/dashboard.helper');
 
 // Overview statistics
 const getOverviewStats = async (req, res) => {
@@ -55,140 +63,268 @@ const getEmployeesByDepartment = async (req, res) => {
   }
 };
 
-// Attendance statistics by month
+/**
+ * Attendance statistics.
+ *
+ * Supports `month` + `year` (existing) and additionally `startDate`/`endDate`.
+ * When an explicit date range is given it takes precedence over month/year.
+ */
 const getAttendanceStats = async (req, res) => {
   try {
-    const { month, year } = req.query;
-    const currentDate = new Date();
-    const targetMonth = parseInt(month) || currentDate.getMonth() + 1;
-    const targetYear = parseInt(year) || currentDate.getFullYear();
+    const { month, year, startDate, endDate } = req.query;
 
-    const startDate = new Date(targetYear, targetMonth - 1, 1);
-    const endDate = new Date(targetYear, targetMonth, 0, 23, 59, 59);
+    const rangeCheck = validateDateRange(startDate, endDate);
+    if (!rangeCheck.valid) {
+      return res.status(400).json({ success: false, error: rangeCheck.error });
+    }
 
-    const stats = await Attendance.aggregate([
-      {
-        $match: {
-          date: { $gte: startDate, $lte: endDate },
-        },
-      },
-      {
-        $group: {
-          _id: "$status",
-          count: { $sum: 1 },
-        },
-      },
-    ]);
+    const myCheck = validateMonthYear(month, year);
+    if (!myCheck.valid) {
+      return res.status(400).json({ success: false, error: myCheck.error });
+    }
 
-    const dailyStats = await Attendance.aggregate([
-      {
-        $match: {
-          date: { $gte: startDate, $lte: endDate },
-        },
-      },
-      {
-        $group: {
-          _id: { $dayOfMonth: "$date" },
-          present: { $sum: { $cond: [{ $eq: ["$status", "present"] }, 1, 0] } },
-          late: { $sum: { $cond: [{ $eq: ["$status", "late"] }, 1, 0] } },
-          absent: { $sum: { $cond: [{ $eq: ["$status", "absent"] }, 1, 0] } },
-        },
-      },
-      { $sort: { _id: 1 } },
-    ]);
+    let range;
+    if (startDate && endDate) {
+      range = normalizeRange(parseDate(startDate), parseDate(endDate));
+    } else {
+      const start = new Date(myCheck.year, myCheck.month - 1, 1, 0, 0, 0, 0);
+      const end = new Date(myCheck.year, myCheck.month, 0, 23, 59, 59, 999);
+      range = { startDate: start, endDate: end };
+    }
+
+    const stats = await statisticsService.getAttendanceStats(
+      range.startDate,
+      range.endDate
+    );
 
     res.json({
       success: true,
-      data: { summary: stats, daily: dailyStats },
+      data: {
+        // Backward-compatible fields.
+        summary: stats.summary,
+        daily: stats.daily,
+        // New fields.
+        period: {
+          startDate: range.startDate,
+          endDate: range.endDate,
+          month: myCheck.month,
+          year: myCheck.year,
+        },
+        counts: stats.counts,
+        totalRecords: stats.totalRecords,
+        onTimeRate: stats.onTimeRate,
+        lateRate: stats.lateRate,
+        absentRate: stats.absentRate,
+        totalWorkHours: stats.totalWorkHours,
+      },
     });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
 };
 
-// Leave statistics
+/**
+ * Leave statistics for a month/year.
+ *
+ * `employeesOnLeave` counts DISTINCT users whose approved leave overlaps the
+ * selected month. `pendingLeaves` counts pending requests created in the
+ * period; `createdLeaves` counts every request created in the period.
+ */
 const getLeaveStats = async (req, res) => {
   try {
-    const { year } = req.query;
-    const currentYear = parseInt(year) || new Date().getFullYear();
-    const startOfYear = new Date(`${currentYear}-01-01T00:00:00.000Z`);
-    const endOfYear = new Date(`${currentYear}-12-31T23:59:59.999Z`);
+    const { year, month, startDate, endDate } = req.query;
 
-    const [byType, byStatus, byMonth] = await Promise.all([
-      Leave.aggregate([
-        { $match: { createdAt: { $gte: startOfYear, $lte: endOfYear } } },
-        {
-          $group: {
-            _id: "$type",
-            count: { $sum: 1 },
-            totalDays: { $sum: "$numberOfDays" },
-          },
-        },
-      ]),
-      Leave.aggregate([
-        { $match: { createdAt: { $gte: startOfYear, $lte: endOfYear } } },
-        { $group: { _id: "$status", count: { $sum: 1 } } },
-      ]),
-      Leave.aggregate([
-        { $match: { createdAt: { $gte: startOfYear, $lte: endOfYear } } },
-        {
-          $group: {
-            _id: { $month: "$startDate" },
-            count: { $sum: 1 },
-            totalDays: { $sum: "$numberOfDays" },
-          },
-        },
-        { $sort: { _id: 1 } },
-      ]),
-    ]);
+    const rangeCheck = validateDateRange(startDate, endDate);
+    if (!rangeCheck.valid) {
+      return res.status(400).json({ success: false, error: rangeCheck.error });
+    }
+
+    const myCheck = validateMonthYear(month, year);
+    if (!myCheck.valid) {
+      return res.status(400).json({ success: false, error: myCheck.error });
+    }
+
+    let range;
+    if (startDate && endDate) {
+      range = normalizeRange(parseDate(startDate), parseDate(endDate));
+    } else {
+      const start = new Date(myCheck.year, 0, 1, 0, 0, 0, 0);
+      const end = new Date(myCheck.year, 11, 31, 23, 59, 59, 999);
+      range = { startDate: start, endDate: end };
+    }
+
+    const stats = await statisticsService.getLeaveStats(
+      range.startDate,
+      range.endDate,
+      myCheck.month,
+      myCheck.year
+    );
 
     res.json({
       success: true,
-      data: { byType, byStatus, byMonth },
+      data: {
+        // Backward-compatible fields.
+        byType: stats.byType,
+        byStatus: stats.byStatus,
+        byMonth: stats.byMonth,
+        // New fields.
+        period: {
+          startDate: range.startDate,
+          endDate: range.endDate,
+          month: myCheck.month,
+          year: myCheck.year,
+        },
+        employeesOnLeave: stats.employeesOnLeave,
+        approvedLeaveRecords: stats.approvedLeaveRecords,
+        approvedLeaveDays: stats.approvedLeaveDays,
+        pendingLeaves: stats.pendingLeaves,
+        createdLeaves: stats.createdLeaves,
+      },
     });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
 };
 
-// Task statistics
+/**
+ * Task statistics with optional startDate / endDate / teamId / employeeId.
+ */
 const getTaskStats = async (req, res) => {
   try {
-    const [byStatus, byPriority, byTeam] = await Promise.all([
-      Task.aggregate([
-        { $match: { status: { $ne: "deleted" } } },
-        { $group: { _id: "$status", count: { $sum: 1 } } },
-      ]),
-      Task.aggregate([
-        { $match: { status: { $ne: "deleted" } } },
-        { $group: { _id: "$priority", count: { $sum: 1 } } },
-      ]),
-      Task.aggregate([
-        { $match: { status: { $ne: "deleted" } } },
-        {
-          $lookup: {
-            from: "teams",
-            localField: "teamId",
-            foreignField: "_id",
-            as: "team",
-          },
-        },
-        { $unwind: { path: "$team", preserveNullAndEmptyArrays: true } },
-        {
-          $group: {
-            _id: "$team.name",
-            total: { $sum: 1 },
-            completed: {
-              $sum: { $cond: [{ $eq: ["$status", "done"] }, 1, 0] },
-            },
-          },
-        },
-      ]),
-    ]);
+    const { startDate, endDate, teamId, employeeId, status, priority } =
+      req.query;
+
+    const rangeCheck = validateDateRange(startDate, endDate);
+    if (!rangeCheck.valid) {
+      return res.status(400).json({ success: false, error: rangeCheck.error });
+    }
+
+    if (teamId && !mongoose.isValidObjectId(teamId)) {
+      return res.status(400).json({ success: false, error: "Invalid teamId" });
+    }
+    if (employeeId && !mongoose.isValidObjectId(employeeId)) {
+      return res.status(400).json({
+        success: false,
+        error: "Invalid employeeId",
+      });
+    }
+
+    // Verify the employee exists so the filter cannot silently match nothing.
+    if (employeeId) {
+      const employee = await User.findById(employeeId).select("_id").lean();
+      if (!employee) {
+        return res.status(404).json({
+          success: false,
+          error: "Employee not found",
+        });
+      }
+    }
+
+    const filter = statisticsService.buildTaskFilter({
+      startDate: parseDate(startDate),
+      endDate: parseDate(endDate),
+      teamId,
+      employeeId,
+      status,
+      priority,
+    });
+
+    const stats = await statisticsService.getTaskStats(filter);
 
     res.json({
       success: true,
-      data: { byStatus, byPriority, byTeam },
+      data: {
+        // Backward-compatible fields.
+        byStatus: stats.byStatus,
+        byPriority: stats.byPriority,
+        byTeam: stats.byTeam,
+        // New fields.
+        filters: { startDate, endDate, teamId, employeeId, status, priority },
+        totalTasks: stats.totalTasks,
+        doneTasks: stats.doneTasks,
+        openTasks: stats.openTasks,
+        overdueTasks: stats.overdueTasks,
+        completionRate: stats.completionRate,
+        overdueRate: stats.overdueRate,
+      },
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+/**
+ * Performance trends over weeks or months.
+ *
+ * Buckets are built from real events (completedAt / createdAt). No synthetic
+ * history is generated for periods without activity.
+ */
+const getPerformanceTrends = async (req, res) => {
+  try {
+    const { startDate, endDate, teamId, employeeId, period } = req.query;
+
+    const periodCheck = validatePeriod(period);
+    if (!periodCheck.valid) {
+      return res.status(400).json({ success: false, error: periodCheck.error });
+    }
+
+    const rangeCheck = validateDateRange(startDate, endDate);
+    if (!rangeCheck.valid) {
+      return res.status(400).json({ success: false, error: rangeCheck.error });
+    }
+
+    if (teamId && !mongoose.isValidObjectId(teamId)) {
+      return res.status(400).json({ success: false, error: "Invalid teamId" });
+    }
+    if (employeeId && !mongoose.isValidObjectId(employeeId)) {
+      return res.status(400).json({
+        success: false,
+        error: "Invalid employeeId",
+      });
+    }
+
+    const now = new Date();
+    let range;
+    if (startDate && endDate) {
+      range = normalizeRange(parseDate(startDate), parseDate(endDate));
+    } else if (period === "week") {
+      const day = (now.getDay() + 6) % 7;
+      const s = new Date(now);
+      s.setDate(now.getDate() - day);
+      s.setHours(0, 0, 0, 0);
+      const e = new Date(s);
+      e.setDate(s.getDate() + 6);
+      e.setHours(23, 59, 59, 999);
+      range = { startDate: s, endDate: e };
+    } else {
+      const s = new Date(now.getFullYear(), now.getMonth() - 5, 1, 0, 0, 0, 0);
+      const e = new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59, 999);
+      range = { startDate: s, endDate: e };
+    }
+
+    const filter = statisticsService.buildTaskFilter({
+      teamId,
+      employeeId,
+    });
+
+    const trend = await statisticsService.getPerformanceTrend(
+      filter,
+      period === "week" ? "week" : "month",
+      range.startDate,
+      range.endDate
+    );
+
+    res.json({
+      success: true,
+      data: {
+        period: {
+          startDate: range.startDate,
+          endDate: range.endDate,
+          period: period === "week" ? "week" : "month",
+        },
+        filters: { teamId, employeeId },
+        trend,
+      },
     });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
@@ -237,5 +373,6 @@ module.exports = {
   getAttendanceStats,
   getLeaveStats,
   getTaskStats,
+  getPerformanceTrends,
   getTeamPerformance,
 };

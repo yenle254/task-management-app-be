@@ -1,6 +1,7 @@
 const constants = {
     // User roles
     USER_ROLES: {
+      SYSTEM_ADMIN: 'system_admin',
       HR_MANAGER: 'hr_manager',
       TEAM_LEAD: 'team_lead',
       EMPLOYEE: 'employee'
@@ -25,10 +26,12 @@ const constants = {
     NOTIFICATION_TYPES: {
       TASK_ASSIGNED: 'task_assigned',
       TASK_UPDATED: 'task_updated',
+      TASK_COMPLETED: 'task_completed',
       COMMENT_ADDED: 'comment_added',
       DEADLINE_REMINDER: 'deadline_reminder',
       LEAVE_APPROVED: 'leave_approved',
-      LEAVE_REJECTED: 'leave_rejected'
+      LEAVE_REJECTED: 'leave_rejected',
+      LEAVE_PENDING: 'leave_pending'
     },
   
     // Leave types
@@ -73,10 +76,45 @@ const constants = {
       ]
     },
   
-    // Time thresholds
+    // Time thresholds (in milliseconds)
     TIME: {
       DEADLINE_WARNING_HOURS: 24,
-      NOTIFICATION_REFRESH_INTERVAL: 30000 // 30 seconds
+      NOTIFICATION_REFRESH_INTERVAL: 30000, // 30 seconds
+      OTP_EXPIRY_MS: 10 * 60 * 1000,        // 10 minutes
+      RESET_TOKEN_EXPIRY_MS: 15 * 60 * 1000, // 15 minutes
+      RATE_LIMIT_WINDOW_MS: 15 * 60 * 1000  // 15 minutes
+    },
+
+    // Password constraints
+    PASSWORD: {
+      MIN_LENGTH: 6,
+      MAX_LENGTH: 128,
+      SALT_ROUNDS: 10,
+      OTP_LENGTH: 6
+    },
+
+    // Office location constraints (meters)
+    OFFICE: {
+      DEFAULT_RADIUS: 200,
+      MIN_RADIUS: 10,
+      MAX_RADIUS: 1000
+    },
+
+    // Pagination defaults
+    PAGINATION: {
+      DEFAULT_PAGE: 1,
+      DEFAULT_LIMIT: 10,
+      MAX_LIMIT: 100,
+      TASKS_DEFAULT_LIMIT: 100,
+      MY_TASKS_DEFAULT_LIMIT: 1000
+    },
+
+    // Task progress limits
+    TASK_PROGRESS: {
+      MIN: 0,
+      MAX: 100,
+      DONE_THRESHOLD: 100,
+      IN_PROGRESS_THRESHOLD: 1
     },
   
     // API response messages
