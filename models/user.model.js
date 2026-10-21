@@ -66,13 +66,12 @@ const UserSchema = new mongoose.Schema(
   },
   {
     timestamps: true,
-    collection: "users",
-    indexes: [
-        { role: 1, isActive: 1 },           // getAvailableLeaders
-        { role: 1, teamId: 1 },            // Find team lead of team
-        { teamId: 1, isActive: 1 }          // getUsersByTeam
-    ]
+    collection: "users"
   }
 );
+
+UserSchema.index({ role: 1, isActive: 1 });
+UserSchema.index({ role: 1, teamId: 1 });
+UserSchema.index({ teamId: 1, isActive: 1 });
 
 module.exports = mongoose.model("User", UserSchema);

@@ -9,6 +9,7 @@ const {
 const Task = require('../../../models/task.model');
 const Attendance = require('../../../models/attendance.model');
 const Leave = require('../../../models/leave.model');
+const User = require('../../../models/user.model');
 const { TASK_STATUS, ATTENDANCE_STATUS, LEAVE_STATUS } = require('../../../utils/constants.utils');
 
 /**
@@ -48,7 +49,10 @@ describe('statistics.service', () => {
 
             const filter = buildTaskFilter({ startDate: start, endDate: end });
 
-            expect(filter.createdAt).toEqual({ $gte: start, $lte: end });
+            expect(filter.createdAt).toEqual({
+                $gte: start,
+                $lte: new Date(2025, 0, 31, 23, 59, 59, 999)
+            });
         });
 
         test('applies the teamId filter', () => {
@@ -78,7 +82,10 @@ describe('statistics.service', () => {
 
             expect(filter.teamId).toBeDefined();
             expect(filter.assignedTo).toBeDefined();
-            expect(filter.createdAt).toEqual({ $gte: start, $lte: end });
+            expect(filter.createdAt).toEqual({
+                $gte: start,
+                $lte: new Date(2025, 0, 31, 23, 59, 59, 999)
+            });
             expect(filter.status).toEqual({ $ne: TASK_STATUS.DELETED });
         });
 
@@ -102,6 +109,15 @@ describe('statistics.service', () => {
     });
 
     describe('getAttendanceStats()', () => {
+        beforeEach(() => {
+            jest.spyOn(User, 'find').mockReturnValue({
+                select: () => ({ lean: () => Promise.resolve([]) })
+            });
+            jest.spyOn(Attendance, 'find').mockReturnValue({
+                select: () => ({ lean: () => Promise.resolve([]) })
+            });
+        });
+
         test('computes onTimeRate and lateRate over valid records', async () => {
             mockAggregate(Attendance, [
                 { _id: ATTENDANCE_STATUS.PRESENT, count: 3, totalWorkHours: 24 },
@@ -146,6 +162,50 @@ describe('statistics.service', () => {
                     ATTENDANCE_STATUS.ABSENT
                 ])
             );
+        });
+
+        test('includes calculated missing working days in absent count and rate denominator', async () => {
+            const userId = new mongoose.Types.ObjectId();
+            User.find.mockReturnValue({
+                select: () => ({ lean: () => Promise.resolve([
+                    { _id: userId, createdAt: new Date('2025-01-01') }
+                ]) })
+            });
+            Attendance.find.mockReturnValue({
+                select: () => ({ lean: () => Promise.resolve([
+                    { userId, date: new Date(2025, 0, 6, 9) }
+                ]) })
+            });
+            mockAggregate(Attendance, [
+                { _id: ATTENDANCE_STATUS.PRESENT, count: 1, totalWorkHours: 8 }
+            ]);
+
+            const stats = await getAttendanceStats(
+                new Date(2025, 0, 6), new Date(2025, 0, 7, 23, 59, 59, 999)
+            );
+
+            expect(stats.calculatedAbsences).toBe(1);
+            expect(stats.counts.absent).toBe(1);
+            expect(stats.totalRecords).toBe(2);
+            expect(stats.onTimeRate).toBe(50);
+            expect(stats.daily).toContainEqual(expect.objectContaining({
+                _id: 7, date: '2025-01-07', absent: 1
+            }));
+        });
+
+        test('keeps daily buckets distinct across months', async () => {
+            jest.spyOn(Attendance, 'aggregate')
+                .mockResolvedValueOnce([])
+                .mockResolvedValueOnce([
+                    { _id: '2025-01-01', present: 1, late: 0, absent: 0 },
+                    { _id: '2025-02-01', present: 2, late: 0, absent: 0 }
+                ]);
+
+            const stats = await getAttendanceStats(
+                new Date(2025, 0, 1), new Date(2025, 1, 1, 23, 59, 59, 999)
+            );
+            expect(stats.daily.map((row) => row._id)).toEqual([1, 1]);
+            expect(stats.daily.map((row) => row.date)).toEqual(['2025-01-01', '2025-02-01']);
         });
     });
 
@@ -219,6 +279,42 @@ describe('statistics.service', () => {
 
             expect(stats.pendingLeaves).toBe(3);
             expect(stats.employeesOnLeave).toBe(0);
+            expect(countSpy).toHaveBeenCalledWith({ status: LEAVE_STATUS.PENDING });
+        });
+
+        test('uses the explicit range for approved leave overlap', async () => {
+            const aggregateSpy = jest.spyOn(Leave, 'aggregate').mockResolvedValue([]);
+            jest.spyOn(Leave, 'countDocuments').mockResolvedValue(0);
+            const range = {
+                startDate: new Date('2025-03-10T00:00:00Z'),
+                endDate: new Date('2025-04-05T23:59:59.999Z')
+            };
+
+            await getLeaveStats(range.startDate, range.endDate, 1, 2025, range);
+
+            expect(aggregateSpy.mock.calls[0][0][0].$match).toEqual({
+                status: LEAVE_STATUS.APPROVED,
+                startDate: { $lte: range.endDate },
+                endDate: { $gte: range.startDate }
+            });
+        });
+
+        test('keeps a year-month breakdown when leaves span years', async () => {
+            jest.spyOn(Leave, 'aggregate').mockImplementation(async (pipeline) =>
+                pipeline.some((stage) => stage.$group?._id?.$dateToString)
+                    ? [
+                        { _id: '2025-01', count: 2, totalDays: 3 },
+                        { _id: '2026-01', count: 1, totalDays: 1 }
+                    ]
+                    : []
+            );
+            jest.spyOn(Leave, 'countDocuments').mockResolvedValue(0);
+
+            const stats = await getLeaveStats(
+                new Date('2025-01-01'), new Date('2026-12-31'), 1, 2025
+            );
+            expect(stats.byYearMonth).toHaveLength(2);
+            expect(stats.byMonth).toEqual([{ _id: 1, count: 3, totalDays: 4 }]);
         });
     });
 
@@ -254,34 +350,10 @@ describe('statistics.service', () => {
 
     describe('getPerformanceTrend()', () => {
         test('builds the trend from real completion and creation events', async () => {
-            const aggregateSpy = jest.spyOn(Task, 'aggregate');
-            aggregateSpy.mockImplementation((pipeline) => {
-                const group = pipeline.find((s) => s.$group);
-                const usesCompletedAt =
-                    JSON.stringify(pipeline).includes('completedAt');
-                if (group && usesCompletedAt) {
-                    return {
-                        then: (resolve) =>
-                            Promise.resolve(
-                                resolve([
-                                    {
-                                        _id: '2025-01',
-                                        completed: 2,
-                                        withDueDate: 2,
-                                        onTime: 1
-                                    }
-                                ])
-                            )
-                    };
-                }
-                if (group) {
-                    return {
-                        then: (resolve) =>
-                            Promise.resolve(resolve([{ _id: '2025-01', total: 5 }]))
-                    };
-                }
-                return { then: (resolve) => Promise.resolve(resolve([])) };
-            });
+            const aggregateSpy = jest.spyOn(Task, 'aggregate').mockResolvedValue([{
+                _id: '2025-01', totalTasks: 5, createdTasks: 4,
+                completedTasks: 2, completedWithDueDate: 2, onTimeTasks: 1
+            }]);
 
             const trend = await getPerformanceTrend(
                 { status: { $ne: TASK_STATUS.DELETED } },
@@ -297,6 +369,7 @@ describe('statistics.service', () => {
             expect(trend[0].completionRate).toBe(40);
             // onTimeRate denominator is only the completed tasks with a dueDate.
             expect(trend[0].onTimeRate).toBe(50);
+            expect(aggregateSpy.mock.calls[0][0][1]).toEqual({ $unwind: '$statusHistory' });
         });
 
         test('does not invent buckets for periods without activity', async () => {

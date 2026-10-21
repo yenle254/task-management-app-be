@@ -80,21 +80,21 @@ router.put(
 
 // Team dashboard routes (Team Lead / HR access)
 router.get(
-  "/:id/members/progress",
+  "/:teamId/members/progress",
   protect,
   authorize(USER_ROLES.TEAM_LEAD, USER_ROLES.HR_MANAGER),
   asyncHandler(getMemberProgress)
 );
 
 router.get(
-  "/:id/performance",
+  "/:teamId/performance",
   protect,
   authorize(USER_ROLES.TEAM_LEAD, USER_ROLES.HR_MANAGER),
   asyncHandler(getTeamPerformanceEndpoint)
 );
 
 router.get(
-  "/:id/overdue",
+  "/:teamId/overdue",
   protect,
   authorize(USER_ROLES.TEAM_LEAD, USER_ROLES.HR_MANAGER),
   asyncHandler(getTeamOverdue)

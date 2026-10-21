@@ -52,11 +52,10 @@ const errorHandler = (err, req, res, next) => {
         });
     }
 
-    // Preserve original public response contract exactly
+    // Log the internal error above, but never expose its message or stack on 5xx.
     res.status(statusCode).json({
         success: false,
-        error: error.message || 'Server Error',
-        ...(process.env.NODE_ENV === 'development' && { stack: err.stack })
+        error: isServerError ? 'Internal server error' : (error.message || 'Request failed')
     });
 };
 

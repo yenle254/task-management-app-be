@@ -5,6 +5,13 @@ const Team = require('../models/team.model');
 const { TASK_STATUS, USER_ROLES } = require('../utils/constants.utils');
 const { percentage, OPEN_STATUSES } = require('../utils/dashboard.helper');
 
+const completionWithDueDate = (task) => {
+  if (task.status !== TASK_STATUS.DONE) return null;
+  const completions = (task.statusHistory || []).filter((event) => event.to === TASK_STATUS.DONE);
+  const latest = completions[completions.length - 1];
+  return latest?.at && latest?.dueDate ? latest : null;
+};
+
 /**
  * Team dashboard service.
  *
@@ -146,10 +153,9 @@ const getTeamPeople = async (team) => {
  * completionRate = completedTasks / totalTasks * 100
  * onTimeRate     = onTimeTasks / completedTasksWithBothDates * 100
  *
- * The on-time denominator only includes completed tasks that have BOTH a
- * dueDate and a completedAt. Legacy tasks without a completion timestamp are
- * excluded from numerator and denominator, so they are never counted as
- * on-time and never inflate the rate.
+ * The on-time denominator only includes completed tasks with a recorded
+ * completion event and due-date snapshot. Legacy tasks without that history
+ * are excluded from numerator and denominator.
  *
  * @param {Object} team - Team document
  * @param {Date} [startDate]
@@ -173,7 +179,7 @@ const getTeamMemberProgress = async (team, startDate, endDate) => {
   }
 
   const tasks = await Task.find(taskQuery)
-    .select('status dueDate completedAt createdAt assignedTo')
+    .select('status dueDate statusHistory createdAt assignedTo')
     .lean();
 
   // Bucket tasks by assignee (a task may have several assignees).
@@ -209,14 +215,9 @@ const getTeamMemberProgress = async (team, startDate, endDate) => {
         new Date(t.dueDate) < now
     ).length;
 
-    const completedWithDates = memberTasks.filter(
-      (t) =>
-        t.status === TASK_STATUS.DONE &&
-        t.completedAt &&
-        t.dueDate
-    );
+    const completedWithDates = memberTasks.map(completionWithDueDate).filter(Boolean);
     const onTimeTasks = completedWithDates.filter(
-      (t) => new Date(t.completedAt) <= new Date(t.dueDate)
+      (event) => new Date(event.at) <= new Date(event.dueDate)
     ).length;
 
     return {
@@ -244,7 +245,7 @@ const getTeamPerformance = async (team) => {
     teamId: team._id,
     status: { $ne: TASK_STATUS.DELETED }
   })
-    .select('status priority dueDate completedAt assignedTo')
+    .select('status priority dueDate statusHistory assignedTo')
     .lean();
 
   const now = new Date();
@@ -288,12 +289,9 @@ const getTeamPerformance = async (team) => {
     })
     .sort((a, b) => b.openTasks - a.openTasks);
 
-  const completedWithDates = tasks.filter(
-    (t) =>
-      t.status === TASK_STATUS.DONE && t.completedAt && t.dueDate
-  );
+  const completedWithDates = tasks.map(completionWithDueDate).filter(Boolean);
   const onTimeTasks = completedWithDates.filter(
-    (t) => new Date(t.completedAt) <= new Date(t.dueDate)
+    (event) => new Date(event.at) <= new Date(event.dueDate)
   ).length;
 
   return {
@@ -308,7 +306,7 @@ const getTeamPerformance = async (team) => {
     overdueCount,
     onTimeRate: percentage(onTimeTasks, completedWithDates.length),
     workloadByMember,
-    mostLoadedMember: workloadByMember[0] || null
+    mostLoadedMember: workloadByMember[0]?.openTasks > 0 ? workloadByMember[0] : null
   };
 };
 

@@ -20,8 +20,8 @@ const {
   notifyCommentAdded
 } = require('../services/notification.service');
 const { getFileUrl, deleteFile, getOriginalFilename } = require('../middleware/upload.middleware');
-const { applyDateFilter, parseDate, validateDateRange } = require('../utils/dashboard.helper');
 const { resolveReadableTeam } = require('../services/team-dashboard.service');
+const getMyTasks = require('./my-tasks.controller');
 
 
 /**
@@ -525,66 +525,6 @@ const updateTaskProgress = async (req, res) => {
 };
 
 /**
- * @desc    Get tasks assigned to current user
- * @route   GET /api/tasks/my
- * @access  Private
- */
-const getMyTasks = async (req, res) => {
-  try {
-    const { page = 1, limit = 1000, status, priority, startDate, endDate } = req.query;
-
-    const rangeCheck = validateDateRange(startDate, endDate);
-    if (!rangeCheck.valid) {
-      return res.status(400).json({ success: false, error: rangeCheck.error });
-    }
-    if ((startDate && !endDate) || (!startDate && endDate)) {
-      return res.status(400).json({
-        success: false,
-        error: 'Both startDate and endDate are required when specifying a date range'
-      });
-    }
-
-    const query = {
-      assignedTo: req.user._id,
-      status: { $ne: TASK_STATUS.DELETED }
-    };
-
-    if (status) query.status = status;
-    if (priority) query.priority = priority;
-
-    // Date filters are applied inside the MongoDB query so pagination totals
-    // stay consistent with the returned page.
-    applyDateFilter(query, 'createdAt', parseDate(startDate), parseDate(endDate));
-
-    const skip = (page - 1) * limit;
-    const total = await Task.countDocuments(query);
-
-    const tasks = await Task.find(query)
-      .populate('assignedBy', 'profile.fullName profile.position profile.avatar email')
-      .populate('assignedTo', 'profile.fullName profile.position profile.avatar email')
-      .populate('teamId', 'name')
-      .sort({ dueDate: 1 })
-      .skip(skip)
-      .limit(parseInt(limit));
-
-    res.json({
-      success: true,
-      count: tasks.length,
-      total,
-      page: parseInt(page),
-      pages: Math.ceil(total / limit),
-      data: enrichTasks(tasks, true)
-    });
-  } catch (error) {
-    console.error('Get my tasks error:', error);
-    res.status(500).json({
-      success: false,
-      error: error.message
-    });
-  }
-};
-
-/**
  * @desc    Get team tasks
  * @route   GET /api/tasks/team/:teamId
  * @access  Private
@@ -920,6 +860,7 @@ const createSubtask = async (req, res) => {
     };
 
     task.subTasks.push(newSubtask);
+    task.$locals.statusChangedBy = req.user._id;
     await task.save(); // This will trigger the pre-save hook to recalculate progress
 
     await task.populate([
@@ -1063,6 +1004,7 @@ const updateSubtask = async (req, res) => {
     }
     subtask.updatedAt = new Date();
 
+    task.$locals.statusChangedBy = req.user._id;
     await task.save();
 
     await task.populate([
@@ -1122,6 +1064,7 @@ const deleteSubtask = async (req, res) => {
 
     // Remove the subtask using pull method
     task.subTasks.pull(subtaskId);
+    task.$locals.statusChangedBy = req.user._id;
     await task.save(); // This will recalculate progress
 
     await task.populate([

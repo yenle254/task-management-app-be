@@ -1,10 +1,10 @@
 const Task = require('../models/task.model');
 const Attendance = require('../models/attendance.model');
 const User = require('../models/user.model');
+const { getTaskEventTrend, countCompletedTasks } = require('./task-history.service');
 const { TASK_STATUS } = require('../utils/constants.utils');
 const {
   resolveDateRange,
-  percentage,
   OPEN_STATUSES
 } = require('../utils/dashboard.helper');
 
@@ -57,9 +57,8 @@ const getLeaveBalance = (user, year) => {
 /**
  * Build performance trend buckets from real task events.
  *
- * Buckets are derived from `completedAt` (real completion timestamps) and
- * `createdAt` (real creation timestamps). No synthetic history is generated:
- * buckets with no activity simply carry zeros.
+ * Buckets are derived from recorded creation and completion events. No
+ * synthetic history or empty periods are generated.
  *
  * @param {string} userId
  * @param {Date} startDate
@@ -68,91 +67,7 @@ const getLeaveBalance = (user, year) => {
  * @returns {Array<{period, label, totalTasks, completedTasks, completionRate}>}
  */
 const getPerformanceTrend = async (userId, startDate, endDate, periodType) => {
-  // 'week' period -> group by day inside the week.
-  // 'month' period -> group by ISO-ish week inside the month.
-  const groupFormat =
-    periodType === 'week'
-      ? { $dateToString: { format: '%Y-%m-%d', date: '$completedAt' } }
-      : { $dateToString: { format: '%G-W%V', date: '$completedAt' } };
-
-  const [completedRows, createdRows] = await Promise.all([
-    Task.aggregate([
-      {
-        $match: {
-          assignedTo: userId,
-          status: TASK_STATUS.DONE,
-          completedAt: { $gte: startDate, $lte: endDate, $ne: null }
-        }
-      },
-      {
-        $group: {
-          _id: groupFormat,
-          completed: { $sum: 1 },
-          onTime: {
-            $sum: {
-              $cond: [
-                {
-                  $and: [
-                    { $ne: ['$dueDate', null] },
-                    { $lte: ['$completedAt', '$dueDate'] }
-                  ]
-                },
-                1,
-                0
-              ]
-            }
-          }
-        }
-      },
-      { $sort: { _id: 1 } }
-    ]),
-    Task.aggregate([
-      {
-        $match: {
-          assignedTo: userId,
-          status: { $ne: TASK_STATUS.DELETED },
-          createdAt: { $gte: startDate, $lte: endDate }
-        }
-      },
-      {
-        $group: {
-          _id: {
-            $dateToString: {
-              format:
-                periodType === 'week' ? '%Y-%m-%d' : '%G-W%V',
-              date: '$createdAt'
-            }
-          },
-          total: { $sum: 1 }
-        }
-      },
-      { $sort: { _id: 1 } }
-    ])
-  ]);
-
-  const completedMap = new Map(completedRows.map((r) => [r._id, r]));
-  const createdMap = new Map(createdRows.map((r) => [r._id, r]));
-
-  // Union of buckets that actually have data.
-  const bucketKeys = Array.from(
-    new Set([...completedMap.keys(), ...createdMap.keys()])
-  ).sort();
-
-  return bucketKeys.map((key) => {
-    const completed = completedMap.get(key);
-    const created = createdMap.get(key);
-    const totalTasks = created?.total || 0;
-    const completedTasks = completed?.completed || 0;
-
-    return {
-      period: key,
-      label: key,
-      totalTasks,
-      completedTasks,
-      completionRate: percentage(completedTasks, totalTasks),
-      onTimeTasks: completed?.onTime || 0
-    };
-  });
+  return getTaskEventTrend({ employeeId: userId }, periodType, startDate, endDate);
 };
 
 /**
@@ -174,19 +89,14 @@ const getEmployeeDashboard = async (userId, query = {}) => {
 
   const [inProgressTasks, completedTasks, overdueTasks, attendanceAgg, user] =
     await Promise.all([
-      // Open tasks currently assigned to the user (not scoped to the range —
-      // "đang thực hiện" reflects the current backlog).
+      // "In progress" reflects the actual Task status, not the entire backlog.
       Task.countDocuments({
         ...baseScope,
-        status: { $in: OPEN_STATUSES }
+        status: TASK_STATUS.IN_PROGRESS
       }),
 
       // Tasks completed inside the range, using the real completion timestamp.
-      Task.countDocuments({
-        ...baseScope,
-        status: TASK_STATUS.DONE,
-        completedAt: { $gte: startDate, $lte: endDate, $ne: null }
-      }),
+      countCompletedTasks({ employeeId: userId }, startDate, endDate),
 
       // Overdue: dueDate < now and still open.
       Task.countDocuments({
@@ -216,7 +126,8 @@ const getEmployeeDashboard = async (userId, query = {}) => {
       User.findById(userId).select('leaveBalance').lean()
     ]);
 
-  const workHours = attendanceAgg[0]?.totalWorkHours ?? 0;
+  const rawWorkHours = attendanceAgg[0]?.totalWorkHours ?? 0;
+  const workHours = Number.isFinite(rawWorkHours) && rawWorkHours >= 0 ? rawWorkHours : 0;
   const attendanceDays = attendanceAgg[0]?.attendanceDays ?? 0;
 
   const performanceTrend = await getPerformanceTrend(

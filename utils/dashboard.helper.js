@@ -203,7 +203,11 @@ const applyDateFilter = (query, field, startDate, endDate) => {
   if (!startDate && !endDate) return;
   const range = {};
   if (startDate) range.$gte = startDate;
-  if (endDate) range.$lte = endDate;
+  if (endDate) {
+    const inclusiveEnd = new Date(endDate);
+    inclusiveEnd.setHours(23, 59, 59, 999);
+    range.$lte = inclusiveEnd;
+  }
   query[field] = range;
 };
 
