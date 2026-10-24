@@ -5,6 +5,7 @@ const User = require('../../../models/user.model');
 const Team = require('../../../models/team.model');
 const { verifyToken } = require('../../../config/jwt');
 const dashboard = require('../../../services/team-dashboard.service');
+const taskHistory = require('../../../services/task-history.service');
 
 jest.mock('../../../config/jwt', () => ({ verifyToken: jest.fn() }));
 jest.mock('../../../controllers/team.controller', () => ({
@@ -19,6 +20,7 @@ jest.mock('../../../services/team-dashboard.service', () => ({
   getTeamPerformance: jest.fn(),
   getTeamOverdueTasks: jest.fn()
 }));
+jest.mock('../../../services/task-history.service', () => ({ getTaskEventTrend: jest.fn().mockResolvedValue([]) }));
 
 describe('team dashboard HTTP routes', () => {
   const teamId = new mongoose.Types.ObjectId();
@@ -122,5 +124,27 @@ describe('team dashboard HTTP routes', () => {
       .set('Authorization', 'Bearer leader');
     expect(response.status).toBe(400);
     expect(dashboard.getTeamOverdueTasks).not.toHaveBeenCalled();
+  });
+
+  test('historical performance trend is scoped to the authorized team and accepts grouping/range', async () => {
+    const response = await request(app)
+      .get(`/api/teams/${teamId}/performance-trends?period=week&startDate=2025-01-01&endDate=2025-01-31`)
+      .set('Authorization', 'Bearer leader');
+    expect(response.status).toBe(200);
+    expect(response.body).toEqual({ success: true, data: expect.objectContaining({ trend: [] }) });
+    expect(taskHistory.getTaskEventTrend).toHaveBeenCalledWith(
+      { teamId: teamId.toString() }, 'week', expect.any(Date), expect.any(Date)
+    );
+    const hrResponse = await request(app).get(`/api/teams/${teamId}/performance-trends?period=month`).set('Authorization', 'Bearer hr');
+    expect(hrResponse.status).toBe(200);
+  });
+
+  test('historical performance trend rejects non-leaders and malformed period/range', async () => {
+    const denied = await request(app).get(`/api/teams/${teamId}/performance-trends`).set('Authorization', 'Bearer outsider');
+    expect(denied.status).toBe(403);
+    const badPeriod = await request(app).get(`/api/teams/${teamId}/performance-trends?period=year`).set('Authorization', 'Bearer leader');
+    expect(badPeriod.status).toBe(400);
+    const incomplete = await request(app).get(`/api/teams/${teamId}/performance-trends?startDate=2025-01-01`).set('Authorization', 'Bearer leader');
+    expect(incomplete.status).toBe(400);
   });
 });

@@ -6,6 +6,7 @@ const { USER_ROLES } = require("../utils/constants.utils");
 const {
   getOverviewStats,
   getEmployeesByDepartment,
+  getDepartmentActivity,
   getAttendanceStats,
   getLeaveStats,
   getTaskStats,
@@ -18,6 +19,7 @@ router.use(authorize(USER_ROLES.HR_MANAGER));
 
 router.get("/overview", asyncHandler(getOverviewStats));
 router.get("/employees-by-department", asyncHandler(getEmployeesByDepartment));
+router.get("/department-activity", asyncHandler(getDepartmentActivity));
 router.get("/attendance", asyncHandler(getAttendanceStats));
 router.get("/leaves", asyncHandler(getLeaveStats));
 router.get("/tasks", asyncHandler(getTaskStats));

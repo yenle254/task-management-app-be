@@ -17,6 +17,7 @@ const {
 const {
   getMemberProgress,
   getTeamPerformanceEndpoint,
+  getTeamPerformanceTrend,
   getTeamOverdue
 } = require("../controllers/team-dashboard.controller");
 const { protect, authorize } = require("../middleware/auth.middleware");
@@ -91,6 +92,13 @@ router.get(
   protect,
   authorize(USER_ROLES.TEAM_LEAD, USER_ROLES.HR_MANAGER),
   asyncHandler(getTeamPerformanceEndpoint)
+);
+
+router.get(
+  "/:teamId/performance-trends",
+  protect,
+  authorize(USER_ROLES.TEAM_LEAD, USER_ROLES.HR_MANAGER),
+  asyncHandler(getTeamPerformanceTrend)
 );
 
 router.get(

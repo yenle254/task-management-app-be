@@ -4,6 +4,7 @@ const {
   getAttendanceStats,
   getLeaveStats,
   getTaskStats,
+  getDepartmentActivity,
   getPerformanceTrend
 } = require('../../../services/statistics.service');
 const Task = require('../../../models/task.model');
@@ -337,7 +338,7 @@ describe('statistics.service', () => {
                 return { then: (resolve) => Promise.resolve(resolve([])) };
             });
 
-            jest.spyOn(Task, 'countDocuments').mockResolvedValue(0);
+            const overdueSpy = jest.spyOn(Task, 'countDocuments').mockResolvedValue(0);
 
             const stats = await getTaskStats({ status: { $ne: TASK_STATUS.DELETED } });
 
@@ -345,6 +346,32 @@ describe('statistics.service', () => {
             expect(stats.doneTasks).toBe(3);
             expect(stats.openTasks).toBe(1);
             expect(stats.completionRate).toBe(75);
+            expect(overdueSpy).toHaveBeenCalledWith(expect.objectContaining({ status: { $in: [TASK_STATUS.TODO, TASK_STATUS.IN_PROGRESS] } }));
+        });
+
+        test('intersects selected task status with open statuses for overdue count', async () => {
+            jest.spyOn(Task, 'aggregate').mockImplementation((pipeline) => ({
+                then: (resolve) => Promise.resolve(resolve(pipeline.some((stage) => stage.$group?._id === '$status') ? [{ _id: TASK_STATUS.TODO, count: 2 }] : []))
+            }));
+            const countSpy = jest.spyOn(Task, 'countDocuments').mockResolvedValue(1);
+            await getTaskStats({ status: TASK_STATUS.TODO, teamId });
+            expect(countSpy).toHaveBeenCalledWith(expect.objectContaining({ status: { $in: [TASK_STATUS.TODO] }, teamId }));
+            countSpy.mockClear();
+            await getTaskStats({ status: TASK_STATUS.DONE, teamId });
+            expect(countSpy).not.toHaveBeenCalled();
+        });
+    });
+
+    describe('getDepartmentActivity()', () => {
+        test('joins active assignees and deduplicates one task per department before measuring current states', async () => {
+            const pipelineSpy = mockAggregate(Task, [{ department: 'Engineering', totalTasks: 4, completedTasks: 2, openTasks: 2, overdueTasks: 1 }]);
+            const rows = await getDepartmentActivity({ createdAt: { $gte: new Date('2025-01-01') }, teamId });
+            expect(rows[0]).toEqual(expect.objectContaining({ department: 'Engineering', totalTasks: 4, completedTasks: 2, openTasks: 2, overdueTasks: 1 }));
+            const pipeline = pipelineSpy.pipeline;
+            expect(pipeline[0].$match).toEqual({ createdAt: { $gte: new Date('2025-01-01') }, teamId });
+            expect(pipeline).toContainEqual({ $lookup: expect.objectContaining({ from: 'users', localField: 'assignedTo', foreignField: '_id' }) });
+            expect(pipeline).toContainEqual({ $match: { 'assignee.isActive': true } });
+            expect(pipeline.some((stage) => stage.$group?._id?.department === '$department')).toBe(true);
         });
     });
 

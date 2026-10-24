@@ -74,6 +74,23 @@ const getEmployeesByDepartment = async (req, res) => {
   }
 };
 
+// Current task state grouped by the current departments of active assignees.
+const getDepartmentActivity = async (req, res) => {
+  try {
+    const { startDate, endDate, teamId, employeeId } = req.query;
+    const rangeCheck = validateDateRange(startDate, endDate);
+    if (!rangeCheck.valid) return res.status(400).json({ success: false, error: rangeCheck.error });
+    if (Boolean(startDate) !== Boolean(endDate)) return res.status(400).json({ success: false, error: 'Both startDate and endDate are required' });
+    if (teamId && !mongoose.isValidObjectId(teamId)) return res.status(400).json({ success: false, error: 'Invalid teamId' });
+    if (employeeId && !mongoose.isValidObjectId(employeeId)) return res.status(400).json({ success: false, error: 'Invalid employeeId' });
+    const filter = statisticsService.buildTaskFilter({ teamId, employeeId, startDate: parseDate(startDate), endDate: parseDate(endDate) });
+    const data = await statisticsService.getDepartmentActivity(filter);
+    return res.json({ success: true, data });
+  } catch (error) {
+    return res.status(500).json({ success: false, message: error.message });
+  }
+};
+
 /**
  * Attendance statistics.
  *
@@ -432,6 +449,7 @@ const getTeamPerformance = async (req, res) => {
 module.exports = {
   getOverviewStats,
   getEmployeesByDepartment,
+  getDepartmentActivity,
   getAttendanceStats,
   getLeaveStats,
   getTaskStats,

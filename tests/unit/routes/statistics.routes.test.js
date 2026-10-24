@@ -13,6 +13,7 @@ jest.mock('../../../services/statistics.service', () => ({
   getAttendanceStats: jest.fn(),
   getLeaveStats: jest.fn(),
   getTaskStats: jest.fn(),
+  getDepartmentActivity: jest.fn(),
   getPerformanceTrend: jest.fn()
 }));
 
@@ -49,12 +50,13 @@ describe('HR statistics HTTP contracts', () => {
       doneTasks: 0, openTasks: 0, overdueTasks: 0,
       completionRate: 0, overdueRate: 0
     });
+    statisticsService.getDepartmentActivity.mockResolvedValue([]);
     statisticsService.getPerformanceTrend.mockResolvedValue([]);
   });
 
   afterEach(() => jest.restoreAllMocks());
 
-  test.each(['overview', 'employees-by-department', 'attendance', 'leaves', 'tasks', 'team-performance', 'performance-trends'])
+  test.each(['overview', 'employees-by-department', 'attendance', 'leaves', 'tasks', 'team-performance', 'performance-trends', 'department-activity'])
   ('%s requires HR Manager authentication', async (path) => {
     expect((await request(app).get(`/api/statistics/${path}`)).status).toBe(401);
     expect((await request(app).get(`/api/statistics/${path}`)
@@ -122,6 +124,22 @@ describe('HR statistics HTTP contracts', () => {
     expect(filter.teamId.toString()).toBe(teamId.toString());
     expect(filter.assignedTo.toString()).toBe(employeeId.toString());
     expect(filter.createdAt.$lte.getHours()).toBe(23);
+  });
+
+  test('department activity requires HR and applies its supported scope/date filters', async () => {
+    const response = await request(app)
+      .get(`/api/statistics/department-activity?teamId=${teamId}&employeeId=${employeeId}&startDate=2025-01-01&endDate=2025-01-31`)
+      .set('Authorization', 'Bearer hr');
+    expect(response.status).toBe(200);
+    expect(response.body).toEqual({ success: true, data: [] });
+    const filter = statisticsService.getDepartmentActivity.mock.calls[0][0];
+    expect(filter.teamId.toString()).toBe(teamId.toString());
+    expect(filter.assignedTo.toString()).toBe(employeeId.toString());
+    expect(filter.createdAt.$gte.getDate()).toBe(1);
+    expect(filter.createdAt.$lte.getHours()).toBe(23);
+    const invalidRange = await request(app).get('/api/statistics/department-activity?startDate=2025-01-01')
+      .set('Authorization', 'Bearer hr');
+    expect(invalidRange.status).toBe(400);
   });
 
   test('rejects non-scalar priority input', async () => {

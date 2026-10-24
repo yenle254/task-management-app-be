@@ -382,9 +382,14 @@ const getTaskStats = async (filter) => {
     if (OPEN_STATUSES.includes(row._id)) openTasks += row.count;
   }
 
-  const overdueTasks = await Task.countDocuments({
+  const statusFilter = filter.status;
+  const requestedStatuses = !statusFilter || statusFilter.$ne !== undefined
+    ? OPEN_STATUSES
+    : (Array.isArray(statusFilter.$in) ? statusFilter.$in : [statusFilter]);
+  const overdueStatuses = requestedStatuses.filter((status) => OPEN_STATUSES.includes(status));
+  const overdueTasks = overdueStatuses.length === 0 ? 0 : await Task.countDocuments({
     ...filter,
-    status: { $in: OPEN_STATUSES },
+    status: { $in: overdueStatuses },
     dueDate: { $lt: new Date(), $ne: null }
   });
 
@@ -401,6 +406,42 @@ const getTaskStats = async (filter) => {
     completionRate: percentage(doneTasks, totalTasks),
     overdueRate: percentage(overdueTasks, totalTasks)
   };
+};
+
+/**
+ * Current task-state activity by the active assignees' current department.
+ * Tasks created in the selected range are deduplicated per department; a task
+ * assigned across departments contributes once to each involved department.
+ */
+const getDepartmentActivity = async (filter) => {
+  const now = new Date();
+  return Task.aggregate([
+    { $match: filter },
+    { $unwind: '$assignedTo' },
+    { $lookup: { from: 'users', localField: 'assignedTo', foreignField: '_id', as: 'assignee' } },
+    { $unwind: '$assignee' },
+    { $match: { 'assignee.isActive': true } },
+    { $set: { department: { $cond: [
+      { $in: [{ $ifNull: ['$assignee.profile.department', ''] }, ['', null]] },
+      'Unassigned', '$assignee.profile.department'
+    ] } } },
+    { $group: {
+      _id: { task: '$_id', department: '$department' },
+      status: { $first: '$status' },
+      dueDate: { $first: '$dueDate' }
+    } },
+    { $group: {
+      _id: '$_id.department',
+      totalTasks: { $sum: 1 },
+      completedTasks: { $sum: { $cond: [{ $eq: ['$status', TASK_STATUS.DONE] }, 1, 0] } },
+      openTasks: { $sum: { $cond: [{ $in: ['$status', OPEN_STATUSES] }, 1, 0] } },
+      overdueTasks: { $sum: { $cond: [{ $and: [
+        { $in: ['$status', OPEN_STATUSES] }, { $ne: [{ $ifNull: ['$dueDate', null] }, null] }, { $lt: ['$dueDate', now] }
+      ] }, 1, 0] } }
+    } },
+    { $sort: { totalTasks: -1, _id: 1 } },
+    { $project: { _id: 0, department: '$_id', totalTasks: 1, completedTasks: 1, openTasks: 1, overdueTasks: 1 } }
+  ]);
 };
 
 /**
@@ -424,6 +465,7 @@ module.exports = {
   getAttendanceStats,
   getLeaveStats,
   getTaskStats,
+  getDepartmentActivity,
   getPerformanceTrend,
   VALID_ATTENDANCE_STATUSES
 };

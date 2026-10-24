@@ -229,7 +229,9 @@ const getTeamMemberProgress = async (team, startDate, endDate) => {
       todoTasks,
       overdueTasks,
       completionRate: percentage(completedTasks, totalTasks),
-      onTimeRate: percentage(onTimeTasks, completedWithDates.length)
+      onTimeRate: percentage(onTimeTasks, completedWithDates.length),
+      onTimeEligibleTasks: completedWithDates.length,
+      onTimeTasks
     };
   });
 };
@@ -305,6 +307,8 @@ const getTeamPerformance = async (team) => {
     overdueRate: percentage(overdueCount, totalTasks),
     overdueCount,
     onTimeRate: percentage(onTimeTasks, completedWithDates.length),
+    onTimeEligibleTasks: completedWithDates.length,
+    onTimeTasks,
     workloadByMember,
     mostLoadedMember: workloadByMember[0]?.openTasks > 0 ? workloadByMember[0] : null
   };

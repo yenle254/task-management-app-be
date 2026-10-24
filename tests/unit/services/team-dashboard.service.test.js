@@ -221,6 +221,8 @@ describe('team-dashboard.service', () => {
             expect(leader.completedTasks).toBe(3);
             expect(leader.completionRate).toBe(100);
             expect(leader.onTimeRate).toBe(50);
+            expect(leader.onTimeEligibleTasks).toBe(2);
+            expect(leader.onTimeTasks).toBe(1);
         });
 
         test('excludes closed tasks from the overdue count', async () => {
@@ -265,6 +267,7 @@ describe('team-dashboard.service', () => {
             expect(perf.completionRate).toBe(0);
             expect(perf.overdueRate).toBe(0);
             expect(perf.onTimeRate).toBe(0);
+            expect(perf.onTimeEligibleTasks).toBe(0);
             expect(perf.mostLoadedMember).toBeNull();
         });
 

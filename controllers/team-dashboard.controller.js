@@ -6,9 +6,11 @@ const {
 } = require('../services/team-dashboard.service');
 const {
   validateDateRange,
+  validatePeriod,
   parseDate,
   normalizeRange
 } = require('../utils/dashboard.helper');
+const { getTaskEventTrend } = require('../services/task-history.service');
 const { PAGINATION } = require('../utils/constants.utils');
 
 /**
@@ -98,6 +100,35 @@ const getTeamPerformanceEndpoint = async (req, res) => {
   }
 };
 
+const getTeamPerformanceTrend = async (req, res) => {
+  try {
+    const { teamId } = req.params;
+    const { startDate, endDate, period } = req.query;
+    const periodCheck = validatePeriod(period);
+    if (!periodCheck.valid) return res.status(400).json({ success: false, error: periodCheck.error });
+    const rangeCheck = validateDateRange(startDate, endDate);
+    if (!rangeCheck.valid) return res.status(400).json({ success: false, error: rangeCheck.error });
+    if (Boolean(startDate) !== Boolean(endDate)) return res.status(400).json({ success: false, error: 'Both startDate and endDate are required' });
+    const access = await resolveAccessibleTeam(req.user, teamId);
+    if (!access.ok) return res.status(access.status).json({ success: false, error: access.error });
+    const now = new Date();
+    let range;
+    if (startDate && endDate) range = normalizeRange(parseDate(startDate), parseDate(endDate));
+    else if (period === 'week') {
+      const start = new Date(now); start.setDate(now.getDate() - (now.getDay() + 6) % 7); start.setHours(0, 0, 0, 0);
+      const end = new Date(start); end.setDate(start.getDate() + 6); end.setHours(23, 59, 59, 999);
+      range = { startDate: start, endDate: end };
+    } else {
+      range = { startDate: new Date(now.getFullYear(), now.getMonth() - 5, 1), endDate: new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59, 999) };
+    }
+    const grouping = period === 'week' ? 'week' : 'month';
+    const trend = await getTaskEventTrend({ teamId: access.team._id.toString() }, grouping, range.startDate, range.endDate);
+    return res.json({ success: true, data: { period: { ...range, period: grouping }, trend } });
+  } catch (error) {
+    return res.status(500).json({ success: false, error: error.message });
+  }
+};
+
 /**
  * @desc    Get overdue tasks for a team (oldest deadline first)
  * @route   GET /api/teams/:teamId/overdue
@@ -159,5 +190,6 @@ const getTeamOverdue = async (req, res) => {
 module.exports = {
   getMemberProgress,
   getTeamPerformanceEndpoint,
+  getTeamPerformanceTrend,
   getTeamOverdue
 };
