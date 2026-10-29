@@ -1,5 +1,6 @@
 const Task = require('../models/task.model');
 const mongoose = require('mongoose');
+const idOf = value => String(value?._id || value || '');
 
 /**
  * Calculate progress based on status or manual progress field
@@ -52,6 +53,7 @@ const getTaskStats = async (userId) => {
               $cond: [
                 {
                   $and: [
+                    { $ne: [{ $ifNull: ['$dueDate', null] }, null] },
                     { $lt: ['$dueDate', new Date()] },
                     { $ne: ['$status', 'done'] }
                   ]
@@ -79,11 +81,11 @@ const getTaskStats = async (userId) => {
  * @returns {Boolean}
  */
 const canUserAccessTask = (user, task) => {
-  const isCreator = task.assignedBy.toString() === user._id.toString();
-  const isAssignee = task.assignedTo.some(person => person._id.toString() === user._id.toString());
+  const isCreator = idOf(task.assignedBy) === idOf(user);
+  const isAssignee = task.assignedTo.some(person => idOf(person) === idOf(user));
   const isHR = user.role === 'hr_manager';
   const isTeamLeadSameTeam = user.role === 'team_lead' &&
-    user.teamId && task.teamId && user.teamId.toString() === task.teamId._id.toString();
+    user.teamId && task.teamId && idOf(user.teamId) === idOf(task.teamId);
 
   return isCreator || isAssignee || isHR || isTeamLeadSameTeam;
 };
@@ -104,8 +106,8 @@ const canCreateOrAssignTask = (user) => {
  * @returns {Boolean}
  */
 const canUpdateTaskStatus = (user, task) => {
-  const isAssignee = task.assignedTo.some(id => id.toString() === user._id.toString());
-  const isCreator = task.assignedBy.toString() === user._id.toString();
+  const isAssignee = task.assignedTo.some(id => idOf(id) === idOf(user));
+  const isCreator = idOf(task.assignedBy) === idOf(user);
   const isHR = user.role === 'hr_manager';
 
   return isAssignee || isCreator || isHR;
@@ -151,6 +153,7 @@ const validateTaskData = (taskData) => {
 const enrichTask = (task, includeOverdue = true) => {
   const taskObj = task.toObject ? task.toObject() : task;
   const enriched = { ...taskObj };
+  delete enriched.pendingAttachmentDeletes;
 
   if (includeOverdue) {
     enriched.overdue = checkIfOverdue(task);

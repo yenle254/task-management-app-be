@@ -8,11 +8,21 @@ const mongoose = require('mongoose');
 const Task = require('../models/task.model');
 const Team = require('../models/team.model');
 const User = require('../models/user.model');
+const { resolveRange, SORTS } = require('../services/task-advanced.service');
+const tagRules = () => [
+  body('tags').optional().isArray({ max: 20 }),
+  body('tags.*').isString().bail().trim().isLength({ min: 1, max: 50 })
+];
+const estimateRules = () => [
+  body('estimatedMinutes').optional({ nullable: true }).isInt({ min: 0, max: 100000 }).toInt(),
+  body('storyPoints').optional({ nullable: true }).isFloat({ min: 0 }).toFloat()
+];
 
 /**
  * Validation chain for creating a task
  */
 const createTaskValidation = [
+  ...tagRules(), ...estimateRules(),
   body('title')
     .trim()
     .notEmpty().withMessage('Task title is required')
@@ -89,6 +99,10 @@ const createTaskValidation = [
  * Validation chain for updating a task
  */
 const updateTaskValidation = [
+  ...tagRules(), ...estimateRules(),
+  body('difficulty').optional().isIn(['easy', 'medium', 'hard']),
+  body('removedAttachments').optional().isArray(),
+  body('removedAttachments.*').isMongoId(),
   param('id')
     .custom((value) => {
       if (!mongoose.Types.ObjectId.isValid(value)) {
@@ -232,7 +246,7 @@ const updateSubtaskValidation = [
     }),
 
   param('subtaskId')
-    .notEmpty().withMessage('Subtask ID is required'),
+    .isMongoId().withMessage('Invalid subtask ID'),
 
   body('title')
     .optional()
@@ -248,6 +262,17 @@ const updateSubtaskValidation = [
  * Validation chain for getting tasks (filters)
  */
 const getTasksValidation = [
+  query('sort').optional().isIn(Object.keys(SORTS)),
+  query('assigneeId').optional().isMongoId(),
+  query('hasSubtasks').optional().isBoolean(),
+  query('tags').optional().isString().bail().custom(value => {
+    const tags = value.split(',');
+    return tags.length <= 5 && tags.every(tag => tag.trim().length > 0 && tag.trim().length <= 50);
+  }),
+  query('fromDate').optional().isISO8601({ strict: true }),
+  query('toDate').optional().isISO8601({ strict: true }),
+  query().custom(value => { resolveRange(value.fromDate, value.toDate); return true; }),
+  query('teamId').optional().isMongoId().withMessage('Invalid team ID'),
   query('page')
     .optional()
     .isInt({ min: 1 }).withMessage('Page must be a positive integer')
@@ -299,7 +324,36 @@ const getOverdueTasksValidation = [
     .toBoolean()
 ];
 
+// Every advanced endpoint validates task and nested resource identifiers.
+const advancedTaskValidation = (kind, ids = []) => {
+  const rules = [param('id').isMongoId(), ...ids.map(id => param(id).isMongoId())];
+  const text = (field, max) => body(field).isString().bail().trim().isLength({ min: 1, max });
+  const operations = {
+    parent: [body('parentTaskId').isMongoId()],
+    checklist: [text('title', 255)],
+    item: [text('text', 500)],
+    patchItem: [body('text').optional().isString().bail().trim().isLength({ min: 1, max: 500 }),
+      body('isCompleted').optional().isBoolean().toBoolean(),
+      body().custom(value => value.text !== undefined || value.isCompleted !== undefined)],
+    dependencies: [body('dependencyIds').isArray({ max: 20 }), body('dependencyIds.*').isMongoId()],
+    watcher: [body('userId').isMongoId()],
+    tags: [body('tags').exists(), ...tagRules()],
+    estimate: [...estimateRules(), body().custom(value => value.estimatedMinutes !== undefined || value.storyPoints !== undefined)],
+    time: [body('minutes').isInt({ min: 1, max: 1440 }).toInt(), body('note').optional().isString().bail().trim().isLength({ max: 500 })]
+  };
+  return [...rules, ...(operations[kind] || [])];
+};
+const taskViewValidation = (rangeRequired = false) => [
+  query('teamId').optional().isMongoId(), query('scope').optional().isIn(['self', 'team']),
+  query('includeSubtasks').optional().isBoolean().toBoolean(),
+  query('page').optional().isInt({ min: 1 }).toInt(),
+  query('limit').optional().isInt({ min: 1, max: 100 }).toInt(),
+  ...(rangeRequired ? [query('from').isISO8601({ strict: true }), query('to').isISO8601({ strict: true }),
+    query().custom(value => { resolveRange(value.from, value.to, true); return true; })] : [])
+];
+
 module.exports = {
+  advancedTaskValidation, taskViewValidation,
   createTaskValidation,
   updateTaskValidation,
   assignTaskValidation,

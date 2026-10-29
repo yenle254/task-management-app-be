@@ -64,7 +64,7 @@ const constants = {
   
     // File upload
     FILE_UPLOAD: {
-      MAX_SIZE: 5 * 1024 * 1024, // 5MB
+      MAX_SIZE: 10 * 1024 * 1024, // Matches active task forms and local Multer storage
       MAX_FILES: 5,
       ALLOWED_TYPES: [
         'application/pdf',
@@ -106,7 +106,7 @@ const constants = {
       DEFAULT_LIMIT: 10,
       MAX_LIMIT: 100,
       TASKS_DEFAULT_LIMIT: 100,
-      MY_TASKS_DEFAULT_LIMIT: 1000
+      MY_TASKS_DEFAULT_LIMIT: 100
     },
 
     // Task progress limits

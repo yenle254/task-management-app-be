@@ -1,6 +1,7 @@
 const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
+const { FILE_UPLOAD } = require('../utils/constants.utils');
 
 const uploadsDir = path.join(__dirname, '../uploads');
 if (!fs.existsSync(uploadsDir)) {
@@ -66,13 +67,15 @@ const upload = multer({
   storage,
   fileFilter,
   limits: {
-    fileSize: 10 * 1024 * 1024, // 10MB
+    // Busboy signals the limit when it reaches this byte count. Permit the
+    // documented inclusive maximum; the first extra byte is rejected.
+    fileSize: FILE_UPLOAD.MAX_SIZE + 1,
   },
 });
 
 const uploadSingle = upload.single('attachment');
 const uploadFile = upload.single('file'); // For general file upload
-const uploadMultiple = upload.array('attachments', 5);
+const uploadMultiple = upload.array('attachments', FILE_UPLOAD.MAX_FILES);
 
 const uploadErrorHandler = (err, req, res, next) => {
   if (err instanceof multer.MulterError) {
@@ -107,7 +110,7 @@ const getFileUrl = (filename, req = null) => {
 };
 
 
-const deleteFile = async (filename) => {
+const deleteFile = async (filename, { throwOnError = false } = {}) => {
   try {
     if (!filename) return false;
     const filePath = path.join(uploadsDir, filename);
@@ -118,6 +121,7 @@ const deleteFile = async (filename) => {
     return false;
   } catch (error) {
     console.error('Delete file error:', error);
+    if (throwOnError) throw error;
     return false;
   }
 };

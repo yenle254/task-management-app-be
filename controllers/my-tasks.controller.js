@@ -1,6 +1,7 @@
 const Task = require('../models/task.model');
+const advanced = require('../services/task-advanced.service');
 const { enrichTasks } = require('../services/task.service');
-const { TASK_STATUS } = require('../utils/constants.utils');
+const { TASK_STATUS, PAGINATION } = require('../utils/constants.utils');
 const { applyDateFilter, parseDate, validateDateRange } = require('../utils/dashboard.helper');
 
 /**
@@ -10,7 +11,7 @@ const { applyDateFilter, parseDate, validateDateRange } = require('../utils/dash
  */
 const getMyTasks = async (req, res) => {
   try {
-    const { page = 1, limit = 1000, status, priority, startDate, endDate } = req.query;
+    const { page = 1, limit = PAGINATION.MY_TASKS_DEFAULT_LIMIT, status, priority, startDate, endDate } = req.query;
 
     const rangeCheck = validateDateRange(startDate, endDate);
     if (!rangeCheck.valid) {
@@ -30,21 +31,15 @@ const getMyTasks = async (req, res) => {
 
     if (status) query.status = status;
     if (priority) query.priority = priority;
+    advanced.applyListFilters(query, req.query, true);
 
     // Date filters are applied inside the MongoDB query so pagination totals
     // stay consistent with the returned page.
     applyDateFilter(query, 'createdAt', parseDate(startDate), parseDate(endDate));
 
-    const skip = (page - 1) * limit;
     const total = await Task.countDocuments(query);
 
-    const tasks = await Task.find(query)
-      .populate('assignedBy', 'profile.fullName profile.position profile.avatar email')
-      .populate('assignedTo', 'profile.fullName profile.position profile.avatar email')
-      .populate('teamId', 'name')
-      .sort({ dueDate: 1 })
-      .skip(skip)
-      .limit(parseInt(limit));
+    const tasks = await advanced.findListTasks(query, req.query, { dueDate: 1 });
 
     res.json({
       success: true,
@@ -56,7 +51,7 @@ const getMyTasks = async (req, res) => {
     });
   } catch (error) {
     console.error('Get my tasks error:', error);
-    res.status(500).json({
+    res.status(error.statusCode || 500).json({
       success: false,
       error: error.message
     });

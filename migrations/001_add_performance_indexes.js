@@ -74,6 +74,10 @@ async function up() {
         console.log('\n📦 Tasks Collection:');
 
         // Single column indexes
+        await createIndexSafe(Task, { parentTaskId: 1 });
+        await createIndexSafe(Task, { dependencies: 1 });
+        await createIndexSafe(Task, { watchers: 1 });
+        await createIndexSafe(Task, { dueDate: 1, startDate: 1 });
         await createIndexSafe(Task, { assignedTo: 1 });
         await createIndexSafe(Task, { teamId: 1 });
         await createIndexSafe(Task, { status: 1 });
@@ -176,6 +180,10 @@ async function down() {
 
     const indexesToRemove = [
         // Tasks
+        { model: Task, name: 'parentTaskId_1' },
+        { model: Task, name: 'dependencies_1' },
+        { model: Task, name: 'watchers_1' },
+        { model: Task, name: 'dueDate_1_startDate_1' },
         { model: Task, name: 'assignedTo_1' },
         { model: Task, name: 'teamId_1' },
         { model: Task, name: 'status_1' },

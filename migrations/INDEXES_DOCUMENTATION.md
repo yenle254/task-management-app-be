@@ -254,3 +254,10 @@ node migrations/001_add_performance_indexes.js down
 - Composite index order matters: put high-selectivity fields first
 - Indexes are built in background by default (non-blocking)
 - `background: true` prevents locking during index creation
+# Advanced Task Management indexes
+
+Task declares `{parentTaskId:1}` for children, `{dependencies:1}` for reverse dependency lookup,
+`{watchers:1}` for watched tasks, and `{dueDate:1,startDate:1}` for calendar/timeline ranges.
+Both migration up/down and INDEXES_REFERENCE.js include these indexes.
+Deploy manually with `node migrations/001_add_performance_indexes.js up`.
+These are code declarations; the migration has not been run and database indexes have not been verified.

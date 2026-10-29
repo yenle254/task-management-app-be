@@ -19,6 +19,10 @@ const mongoose = require('mongoose');
 // TASKS COLLECTION
 // ============================================
 const taskIndexes = [
+  { key: { parentTaskId: 1 }, description: 'Direct children of a parent task' },
+  { key: { dependencies: 1 }, description: 'Tasks blocked by another task' },
+  { key: { watchers: 1 }, description: 'Self watched tasks' },
+  { key: { dueDate: 1, startDate: 1 }, description: 'Calendar and timeline date range' },
   // Single column indexes
   { key: { assignedTo: 1 }, description: 'getMyTasks, task lookup by assignee' },
   { key: { teamId: 1 }, description: 'getTeamTasks, getAllTasks' },
@@ -110,6 +114,10 @@ const teamIndexes = [
 use tma_demo;
 
 // TASKS
+db.tasks.createIndex({ parentTaskId: 1 });
+db.tasks.createIndex({ dependencies: 1 });
+db.tasks.createIndex({ watchers: 1 });
+db.tasks.createIndex({ dueDate: 1, startDate: 1 });
 db.tasks.createIndex({ assignedTo: 1 });
 db.tasks.createIndex({ teamId: 1 });
 db.tasks.createIndex({ status: 1 });

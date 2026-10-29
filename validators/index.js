@@ -79,6 +79,8 @@ const {
 } = messageValidators;
 
 module.exports = {
+  advancedTaskValidation: taskValidators.advancedTaskValidation,
+  taskViewValidation: taskValidators.taskViewValidation,
   // Auth
   registerValidation,
   loginValidation,

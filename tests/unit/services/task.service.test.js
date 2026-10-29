@@ -14,6 +14,20 @@ const {
 } = require('../../../services/task.service');
 
 describe('TaskService', () => {
+  test('enrichment preserves advanced fields and populated creator access', () => {
+    const userId = new mongoose.Types.ObjectId();
+    const task = {
+      title: 'Task', status: 'todo', progress: 42, dueDate: null,
+      assignedBy: { _id: userId }, assignedTo: [], parentTaskId: null,
+      dependencies: [], watchers: [userId], tags: ['Tag'], checklists: [],
+      estimatedMinutes: 60, storyPoints: 2.5, actualMinutes: 15,
+      timeEntries: [{ userId, minutes: 15 }], statusHistory: [{ from: null, to: 'todo' }]
+    };
+    expect(enrichTask(task)).toMatchObject(task);
+    expect(enrichTask(task).progress).toBe(42);
+    expect(canUserAccessTask({ _id: userId, role: 'employee' }, task)).toBe(true);
+    expect(canUpdateTaskStatus({ _id: userId, role: 'employee' }, task)).toBe(true);
+  });
   describe('calculateProgress()', () => {
     it('should return manual progress if set', () => {
       const task = { progress: 75 };

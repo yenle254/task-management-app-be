@@ -34,7 +34,32 @@ const StatusHistorySchema = new mongoose.Schema({
     dueDate: { type: Date, default: null }
 }, { _id: false });
 
+const ChecklistItemSchema = new mongoose.Schema({
+    text: { type: String, required: true, trim: true, maxlength: 500 },
+    isCompleted: { type: Boolean, default: false },
+    createdAt: { type: Date, default: Date.now }
+});
+const ChecklistSchema = new mongoose.Schema({
+    title: { type: String, required: true, trim: true, maxlength: 255 },
+    items: { type: [ChecklistItemSchema], default: [] },
+    createdAt: { type: Date, default: Date.now }
+});
+const TimeEntrySchema = new mongoose.Schema({
+    userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
+    minutes: { type: Number, required: true, min: 1, max: 1440, validate: Number.isInteger },
+    note: { type: String, default: '', trim: true, maxlength: 500 },
+    loggedAt: { type: Date, default: Date.now }
+});
+
 const TaskSchema = new mongoose.Schema({
+    parentTaskId: { type: mongoose.Schema.Types.ObjectId, ref: 'Task', default: null },
+    checklists: { type: [ChecklistSchema], default: [] },
+    dependencies: { type: [{ type: mongoose.Schema.Types.ObjectId, ref: 'Task' }], default: [], validate: v => v.length <= 20 },
+    watchers: { type: [{ type: mongoose.Schema.Types.ObjectId, ref: 'User' }], default: [], validate: v => v.length <= 50 },
+    estimatedMinutes: { type: Number, default: null, min: 0, max: 100000, validate: v => v == null || Number.isInteger(v) },
+    storyPoints: { type: Number, default: null, min: 0 },
+    timeEntries: { type: [TimeEntrySchema], default: [] },
+    actualMinutes: { type: Number, default: 0, min: 0 },
     title: { type: String, required: true, trim: true },
     description: { type: String, default: '' },
     status: { type: String, enum: ['todo', 'in_progress', 'done', 'deleted'], default: 'todo', index: true },
@@ -51,12 +76,17 @@ const TaskSchema = new mongoose.Schema({
     statusHistory: { type: [StatusHistorySchema], default: [] },
     progress: { type: Number, min: 0, max: 100, default: 0 },
     attachments: [AttachmentSchema],
+    // Durable deletion intent is saved atomically with removal of metadata.
+    // Storage errors can be retried without losing the filename or attachment ID.
+    pendingAttachmentDeletes: { type: [AttachmentSchema], default: [] },
     comments: [CommentSchema],
     subTasks: [SubTaskSchema],
     tags: [String],
 }, {
     timestamps: true,
-    collection: 'tasks'
+    collection: 'tasks',
+    toJSON: { transform: (_doc, ret) => { delete ret.pendingAttachmentDeletes; return ret; } },
+    toObject: { transform: (_doc, ret) => { delete ret.pendingAttachmentDeletes; return ret; } }
 });
 
 TaskSchema.index({ assignedTo: 1, status: 1 });
@@ -64,6 +94,10 @@ TaskSchema.index({ teamId: 1, status: 1 });
 TaskSchema.index({ status: 1, dueDate: 1 });
 TaskSchema.index({ assignedTo: 1, status: 1, dueDate: 1 });
 TaskSchema.index({ 'statusHistory.at': 1 });
+TaskSchema.index({ parentTaskId: 1 });
+TaskSchema.index({ dependencies: 1 });
+TaskSchema.index({ watchers: 1 });
+TaskSchema.index({ dueDate: 1, startDate: 1 });
 
 
 /**
@@ -79,88 +113,110 @@ TaskSchema.pre('init', function (doc) {
 });
 
 
-TaskSchema.pre('save', function(next) {
-    if (this.subTasks && this.subTasks.length > 0) {
-        const completedCount = this.subTasks.filter(st => st.isCompleted).length;
-        const totalSubtasks = this.subTasks.length;
-        this.progress = Math.round((completedCount / totalSubtasks) * 100);
+TaskSchema.pre('save', async function(next) {
+    try {
+        await require('../services/task-write-lock.service').journalTaskSave(this);
+        const advanced = require('../services/task-advanced.service');
+        const requestedStatus = this.status;
+        if (this.status === 'deleted' || this.$locals.previousStatus === 'deleted') {
+            this.status = 'deleted';
+        } else if (this.subTasks && this.subTasks.length > 0) {
+            const completedCount = this.subTasks.filter(st => st.isCompleted).length;
+            const totalSubtasks = this.subTasks.length;
+            advanced.recalculateProgress(this);
 
-        if (completedCount === totalSubtasks) {
-            this.status = 'done';
-        } else if (completedCount > 0) {
-            if (this.status === 'done') {
-                this.status = 'in_progress';
-            } else if (this.status === 'todo') {
-                this.status = 'in_progress';
-            }
-        } else {
-            if (this.status === 'done') {
-                this.status = 'todo';
+            if (completedCount === totalSubtasks) {
+                this.status = 'done';
+            } else if (completedCount > 0) {
+                if (this.status === 'done') {
+                    this.status = 'in_progress';
+                } else if (this.status === 'todo') {
+                    this.status = 'in_progress';
+                }
+            } else {
+                if (this.status === 'done') {
+                    this.status = 'todo';
+                }
             }
         }
-    } else {
-        this.progress = 0;
-    }
 
-    // Track completion time.
-    //
-    // `completedAt` reflects the CURRENT state: it is set when the task
-    // reaches 'done' and cleared when the task is reopened. A task that is
-    // completed, reopened and completed again therefore keeps the latest
-    // completion timestamp here, while `statusHistory` retains every
-    // individual completion event.
-    if (this.isModified('status')) {
-        if (this.status === 'done' && !this.completedAt) {
-            this.completedAt = new Date();
-        } else if (this.status !== 'done' && this.completedAt) {
-            this.completedAt = null;
+        advanced.syncActualMinutes(this);
+        if (this.status === 'done') {
+            const completion = await advanced.canCompleteTask(this);
+            if (!completion.ok) {
+                if (requestedStatus === 'done') throw advanced.fail(completion.error);
+                // Completing embedded work is allowed while blocked, but never
+                // bypasses dependency/child checks to record a false completion.
+                this.status = 'in_progress';
+            }
         }
+
+        // Track completion time.
+        //
+        // `completedAt` reflects the CURRENT state: it is set when the task
+        // reaches 'done' and cleared when the task is reopened. A task that is
+        // completed, reopened and completed again therefore keeps the latest
+        // completion timestamp here, while `statusHistory` retains every
+        // individual completion event.
+        if (this.isModified('status')) {
+            if (this.status === 'done' && !this.completedAt) {
+                this.completedAt = new Date();
+            } else if (this.status !== 'done' && this.completedAt) {
+                this.completedAt = null;
+            }
+        }
+
+        // Append a history entry for the transition, exactly once per transition.
+        //
+        // The previous status is resolved in this order:
+        //  1. `$locals.previousStatus` — set by a controller that changed the
+        //     status explicitly and knows the old value.
+        //  2. `$locals.loadedStatus` — the status the document was loaded with,
+        //     captured by the `init` hook. This covers the subtask recalculation
+        //     path, where the transition is derived inside the hook.
+        //  3. The last recorded history entry — for documents that were already
+        //     carrying history.
+        //
+        // Whichever path changed the status, exactly one history entry is
+        // appended per transition.
+        const lastEntry = this.statusHistory[this.statusHistory.length - 1];
+        const previousStatus =
+            this.$locals.previousStatus !== undefined
+                ? this.$locals.previousStatus
+                : this.$locals.loadedStatus !== undefined
+                    ? this.$locals.loadedStatus
+                    : lastEntry
+                        ? lastEntry.to
+                        : 'todo';
+
+        const initialSave = this.isNew && !lastEntry &&
+            this.$locals.previousStatus === undefined &&
+            this.$locals.loadedStatus === undefined;
+
+        if (initialSave || (this.isModified('status') && previousStatus !== this.status)) {
+            this.statusHistory.push({
+                from: initialSave ? null : previousStatus,
+                to: this.status,
+                at: initialSave ? (this.createdAt || new Date()) : new Date(),
+                by: this.$locals.statusChangedBy || null,
+                teamId: this.teamId || null,
+                assignedTo: this.assignedTo || [],
+                dueDate: this.dueDate || null
+            });
+
+            // Advance the recorded previous status so the same transition is never
+            // appended twice, even if the hook runs again before the next change.
+            this.$locals.previousStatus = this.status;
+        }
+
+        next();
+    } catch (error) { next(error); }
+});
+
+TaskSchema.post('save', async function(task) {
+    if (task.parentTaskId) {
+        await require('../services/task-advanced.service').syncParentTask(task.parentTaskId, task.$locals.statusChangedBy);
     }
-
-    // Append a history entry for the transition, exactly once per transition.
-    //
-    // The previous status is resolved in this order:
-    //  1. `$locals.previousStatus` — set by a controller that changed the
-    //     status explicitly and knows the old value.
-    //  2. `$locals.loadedStatus` — the status the document was loaded with,
-    //     captured by the `init` hook. This covers the subtask recalculation
-    //     path, where the transition is derived inside the hook.
-    //  3. The last recorded history entry — for documents that were already
-    //     carrying history.
-    //
-    // Whichever path changed the status, exactly one history entry is
-    // appended per transition.
-    const lastEntry = this.statusHistory[this.statusHistory.length - 1];
-    const previousStatus =
-        this.$locals.previousStatus !== undefined
-            ? this.$locals.previousStatus
-            : this.$locals.loadedStatus !== undefined
-                ? this.$locals.loadedStatus
-                : lastEntry
-                    ? lastEntry.to
-                    : 'todo';
-
-    const initialSave = this.isNew && !lastEntry &&
-        this.$locals.previousStatus === undefined &&
-        this.$locals.loadedStatus === undefined;
-
-    if (initialSave || (this.isModified('status') && previousStatus !== this.status)) {
-        this.statusHistory.push({
-            from: initialSave ? null : previousStatus,
-            to: this.status,
-            at: initialSave ? (this.createdAt || new Date()) : new Date(),
-            by: this.$locals.statusChangedBy || null,
-            teamId: this.teamId || null,
-            assignedTo: this.assignedTo || [],
-            dueDate: this.dueDate || null
-        });
-
-        // Advance the recorded previous status so the same transition is never
-        // appended twice, even if the hook runs again before the next change.
-        this.$locals.previousStatus = this.status;
-    }
-
-    next();
 });
 
 module.exports = mongoose.model('Task', TaskSchema);

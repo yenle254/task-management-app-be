@@ -1,4 +1,6 @@
 const Task = require('../models/task.model');
+const mongoose = require('mongoose');
+const advanced = require('../services/task-advanced.service');
 const Team = require('../models/team.model');
 const User = require('../models/user.model');
 const {
@@ -31,7 +33,7 @@ const getMyTasks = require('./my-tasks.controller');
  */
 const createTask = async (req, res) => {
   try {
-    const { title, description, assignedTo, teamId, priority = 'medium', dueDate, startDate, tags = [], attachments = [], comments = [] } = req.body;
+    const { title, description, assignedTo, teamId, priority = 'medium', difficulty = 'medium', dueDate, startDate, tags = [], attachments = [], comments = [] } = req.body;
 
     if (!canCreateOrAssignTask(req.user)) {
       return res.status(403).json({
@@ -91,10 +93,13 @@ const createTask = async (req, res) => {
       assignedTo,
       teamId,
       priority,
+      difficulty,
       status: TASK_STATUS.TODO,
       dueDate: dueDate || null,
       startDate: startDate || null,
-      tags,
+      tags: advanced.normalizeTags(tags),
+      estimatedMinutes: req.body.estimatedMinutes,
+      storyPoints: req.body.storyPoints,
       attachments,
       comments,
       progress: 0
@@ -119,7 +124,7 @@ const createTask = async (req, res) => {
     });
   } catch (error) {
     console.error('Create task error:', error);
-    res.status(500).json({
+    res.status(error.statusCode || 500).json({
       success: false,
       error: error.message
     });
@@ -133,7 +138,7 @@ const createTask = async (req, res) => {
  */
 const getAllTasks = async (req, res) => {
   try {
-    const { page = PAGINATION.DEFAULT_PAGE, limit = PAGINATION.TASKS_DEFAULT_LIMIT, status, priority, teamId, search } = req.query;
+    const { page = PAGINATION.DEFAULT_PAGE, limit = PAGINATION.TASKS_DEFAULT_LIMIT, status, priority, teamId } = req.query;
     const query = { status: { $ne: TASK_STATUS.DELETED } };
 
     // Only HR Manager and Team Lead can view all tasks
@@ -162,18 +167,11 @@ const getAllTasks = async (req, res) => {
 
     if (status) query.status = status;
     if (priority) query.priority = priority;
-    if (search) query.title = { $regex: search.trim(), $options: 'i' };
+    advanced.applyListFilters(query, req.query);
 
-    const skip = (page - 1) * limit;
     const total = await Task.countDocuments(query);
 
-    const tasks = await Task.find(query)
-      .populate('assignedBy', 'profile.fullName profile.position profile.avatar email')
-      .populate('assignedTo', 'profile.fullName profile.position profile.avatar email')
-      .populate('teamId', 'name')
-      .sort({ createdAt: -1 })
-      .skip(skip)
-      .limit(parseInt(limit));
+    const tasks = await advanced.findListTasks(query, req.query, { createdAt: -1 });
 
     const enrichedTasks = tasks.map(t => enrichTask(t, true));
 
@@ -187,7 +185,7 @@ const getAllTasks = async (req, res) => {
     });
   } catch (error) {
     console.error('Get all tasks error:', error);
-    res.status(500).json({
+    res.status(error.statusCode || 500).json({
       success: false,
       error: error.message
     });
@@ -205,7 +203,9 @@ const getTaskById = async (req, res) => {
       .populate('assignedBy', 'profile.fullName profile.position profile.avatar email')
       .populate('assignedTo', 'profile.fullName profile.position profile.avatar email')
       .populate('teamId', 'name')
-      .populate('comments.userId', 'profile.fullName profile.position profile.avatar email');
+      .populate('comments.userId', 'profile.fullName profile.position profile.avatar email')
+      .populate('statusHistory.by', advanced.USER_FIELDS)
+      .populate('watchers timeEntries.userId', advanced.USER_FIELDS);
 
     if (!task || task.status === TASK_STATUS.DELETED) {
       return res.status(404).json({
@@ -213,7 +213,6 @@ const getTaskById = async (req, res) => {
         error: 'Task not found'
       });
     }
-    console.log("task.assignedTo (after populate):", task.assignedTo);
     if (!canUserAccessTask(req.user, task)) {
       return res.status(403).json({
         success: false,
@@ -227,7 +226,7 @@ const getTaskById = async (req, res) => {
     });
   } catch (error) {
     console.error('Get task by ID error:', error);
-    res.status(500).json({
+    res.status(error.statusCode || 500).json({
       success: false,
       error: error.message
     });
@@ -250,12 +249,19 @@ const updateTask = async (req, res) => {
       return res.status(403).json({ success: false, error: 'Not authorized' });
     }
 
-    const allowedFields = ['title', 'description', 'priority', 'dueDate', 'startDate', 'tags'];
+    const sensitiveFields = ['priority', 'dueDate', 'startDate', 'tags', 'difficulty', 'estimatedMinutes', 'storyPoints'];
+    if (sensitiveFields.some(field => req.body[field] !== undefined) && !canCreateOrAssignTask(req.user)) {
+      return res.status(403).json({ success: false, error: 'Only Team Lead or HR Manager can update task planning fields' });
+    }
+    const allowedFields = ['title', 'description', ...sensitiveFields];
     allowedFields.forEach(field => {
       if (req.body[field] !== undefined) task[field] = req.body[field];
     });
+    if (req.body.tags) task.tags = advanced.normalizeTags(req.body.tags);
 
+    const removed = advanced.removeAttachments(task, req.body.removedAttachments || []);
     await task.save();
+    await advanced.deleteAttachmentFiles(removed, task._id);
 
     if (req.body.priority || req.body.dueDate) {
       await notifyTaskUpdated(task, req.user._id);
@@ -269,7 +275,7 @@ const updateTask = async (req, res) => {
     });
   } catch (error) {
     console.error('Update task error:', error);
-    res.status(500).json({ success: false, error: error.message });
+    res.status(error.statusCode || 500).json({ success: false, error: error.message });
   }
 };
 
@@ -298,7 +304,7 @@ const deleteTask = async (req, res) => {
     res.json({ success: true, message: 'Task deleted successfully' });
   } catch (error) {
     console.error('Delete task error:', error);
-    res.status(500).json({ success: false, error: error.message });
+    res.status(error.statusCode || 500).json({ success: false, error: error.message });
   }
 };
 
@@ -379,7 +385,7 @@ const assignTask = async (req, res) => {
     });
   } catch (error) {
     console.error('Assign task error:', error);
-    res.status(500).json({ success: false, error: error.message });
+    res.status(error.statusCode || 500).json({ success: false, error: error.message });
   }
 };
 
@@ -427,6 +433,10 @@ const updateTaskStatus = async (req, res) => {
       }
     }
 
+    if (status === TASK_STATUS.DONE) {
+      const completion = await advanced.canCompleteTask(task);
+      if (!completion.ok) return res.status(400).json({ success: false, error: completion.error });
+    }
     const previousStatus = task.status;
     task.status = status;
 
@@ -461,7 +471,7 @@ const updateTaskStatus = async (req, res) => {
     });
   } catch (error) {
     console.error('Update task status error:', error);
-    res.status(500).json({ success: false, error: error.message });
+    res.status(error.statusCode || 500).json({ success: false, error: error.message });
   }
 };
 
@@ -520,7 +530,7 @@ const updateTaskProgress = async (req, res) => {
     });
   } catch (error) {
     console.error('Update task progress error:', error);
-    res.status(500).json({ success: false, error: error.message });
+    res.status(error.statusCode || 500).json({ success: false, error: error.message });
   }
 };
 
@@ -572,7 +582,7 @@ const getTeamTasks = async (req, res) => {
     });
   } catch (error) {
     console.error('Get team tasks error:', error);
-    res.status(500).json({
+    res.status(error.statusCode || 500).json({
       success: false,
       error: error.message
     });
@@ -624,7 +634,7 @@ const addComment = async (req, res) => {
     });
   } catch (error) {
     console.error('Add comment error:', error);
-    res.status(500).json({ success: false, error: error.message });
+    res.status(error.statusCode || 500).json({ success: false, error: error.message });
   }
 };
 
@@ -659,7 +669,7 @@ const getOverdueTasks = async (req, res) => {
     });
   } catch (error) {
     console.error('Get overdue tasks error:', error);
-    res.status(500).json({
+    res.status(error.statusCode || 500).json({
       success: false,
       error: error.message
     });
@@ -681,7 +691,7 @@ const getTaskStats_endpoint = async (req, res) => {
     });
   } catch (error) {
     console.error('Get task stats error:', error);
-    res.status(500).json({
+    res.status(error.statusCode || 500).json({
       success: false,
       error: error.message
     });
@@ -743,7 +753,7 @@ const addAttachment = async (req, res) => {
     if (req.file) deleteFile(req.file.filename);
     
     console.error('Add attachment error:', error);
-    res.status(500).json({
+    res.status(error.statusCode || 500).json({
       success: false,
       error: error.message
     });
@@ -812,7 +822,7 @@ const addAttachmentBulk = async (req, res) => {
       }
     }
     console.error('Add attachment bulk error:', error);
-    res.status(500).json({
+    res.status(error.statusCode || 500).json({
       success: false,
       error: error.message
     });
@@ -879,7 +889,7 @@ const createSubtask = async (req, res) => {
     });
   } catch (error) {
     console.error('Create subtask error:', error);
-    res.status(500).json({
+    res.status(error.statusCode || 500).json({
       success: false,
       error: error.message
     });
@@ -912,7 +922,7 @@ const toggleSubtask = async (req, res) => {
     }
 
     // Find the subtask
-    const subtask = task.subTasks.id(subtaskId);
+    const subtask = mongoose.Types.ObjectId.isValid(subtaskId) ? task.subTasks.id(subtaskId) : null;
     if (!subtask) {
       return res.status(404).json({ 
         success: false, 
@@ -955,7 +965,7 @@ const toggleSubtask = async (req, res) => {
     });
   } catch (error) {
     console.error('Toggle subtask error:', error);
-    res.status(500).json({
+    res.status(error.statusCode || 500).json({
       success: false,
       error: error.message
     });
@@ -987,7 +997,7 @@ const updateSubtask = async (req, res) => {
       });
     }
 
-    const subtask = task.subTasks.id(subtaskId);
+    const subtask = mongoose.Types.ObjectId.isValid(subtaskId) ? task.subTasks.id(subtaskId) : null;
     if (!subtask) {
       return res.status(404).json({ 
         success: false, 
@@ -1023,7 +1033,7 @@ const updateSubtask = async (req, res) => {
     });
   } catch (error) {
     console.error('Update subtask error:', error);
-    res.status(500).json({
+    res.status(error.statusCode || 500).json({
       success: false,
       error: error.message
     });
@@ -1054,7 +1064,7 @@ const deleteSubtask = async (req, res) => {
       });
     }
 
-    const subtask = task.subTasks.id(subtaskId);
+    const subtask = mongoose.Types.ObjectId.isValid(subtaskId) ? task.subTasks.id(subtaskId) : null;
     if (!subtask) {
       return res.status(404).json({ 
         success: false, 
@@ -1080,7 +1090,7 @@ const deleteSubtask = async (req, res) => {
     });
   } catch (error) {
     console.error('Delete subtask error:', error);
-    res.status(500).json({
+    res.status(error.statusCode || 500).json({
       success: false,
       error: error.message
     });
@@ -1117,7 +1127,7 @@ const getSubtasks = async (req, res) => {
     });
   } catch (error) {
     console.error('Get subtasks error:', error);
-    res.status(500).json({
+    res.status(error.statusCode || 500).json({
       success: false,
       error: error.message
     });

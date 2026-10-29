@@ -46,6 +46,36 @@ describe('Task model status history', () => {
     };
 
     describe('pre-save hook', () => {
+        test('blocks explicit completion and preserves history when dependencies are unfinished', async () => {
+            const task = buildTask({ status: 'done', dependencies: [new mongoose.Types.ObjectId()] });
+            task.$locals.previousStatus = 'todo';
+            jest.spyOn(Task, 'find').mockReturnValue({ select() { return this; }, lean: async () => [{ title: 'Pending', status: 'todo' }] });
+            await expect(runSaveHooks(task)).rejects.toThrow('blocked by');
+            expect(task.statusHistory).toHaveLength(0);
+        });
+        test('subtask completion cannot bypass a dependency, including on checklist saves', async () => {
+            const task = buildTask({ status: 'todo', dependencies: [new mongoose.Types.ObjectId()], subTasks: [{ title: 'Complete', isCompleted: true }] });
+            jest.spyOn(Task, 'find').mockReturnValue({ select() { return this; }, lean: async () => [{ title: 'Pending', status: 'todo' }] });
+            await runSaveHooks(task);
+            expect(task.status).toBe('in_progress');
+            expect(task.progress).toBe(100);
+            expect(task.statusHistory.map(entry => entry.to)).not.toContain('done');
+        });
+        test('preserves manual progress without subtasks', async () => {
+            const task = buildTask({ progress: 65 });
+            await runSaveHooks(task);
+            expect(task.progress).toBe(65);
+        });
+
+        test.each([true, false])('never revives a deleted task with completed=%s subtasks', async (isCompleted) => {
+            const task = buildTask({ status: 'deleted', subTasks: [{ title: 'one', isCompleted }] });
+            task.$locals.previousStatus = 'in_progress';
+            await runSaveHooks(task);
+            await runSaveHooks(task);
+            expect(task.status).toBe('deleted');
+            expect(task.statusHistory).toHaveLength(1);
+            expect(task.statusHistory[0]).toMatchObject({ from: 'in_progress', to: 'deleted' });
+        });
         test('records creation with the initial team, assignees and due date', async () => {
             const dueDate = new Date('2025-04-30T12:00:00Z');
             const task = buildTask({ dueDate });
