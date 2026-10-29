@@ -62,6 +62,12 @@ const UserSchema = new mongoose.Schema(
       },
       default: {},
     },
+    // Balance movement receipt is written atomically with the yearly balance.
+    // Keys are server-generated UUIDs (or legacy_<leaveId> for old approvals).
+    leaveBalanceOperations: { type: Map, of: new mongoose.Schema({
+      leaveId: mongoose.Schema.Types.ObjectId, year: Number, days: Number,
+      state: { type: String, enum: ['deducted', 'refunded'] }
+    }, { _id: false }), default: {}, select: false },
     resetPassword: { type: ResetPasswordSchema, default: {} },
   },
   {

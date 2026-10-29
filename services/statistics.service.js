@@ -262,7 +262,7 @@ const getLeaveStats = async (startDate, endDate, month, year, explicitOverlapRan
           }
         }
       ]),
-      Leave.countDocuments({ status: LEAVE_STATUS.PENDING }),
+      Leave.countDocuments({ status: { $in: ['pending', 'pending_team_lead', 'pending_hr'] } }),
       Leave.countDocuments(createdMatch),
       Leave.aggregate([
         { $match: createdMatch },

@@ -1,6 +1,5 @@
-const Leave = require('../models/leave.model');
 const User = require('../models/user.model');
-const { differenceInCalendarDays, isBefore, isAfter, startOfDay, isFuture, isPast } = require('date-fns');
+const { differenceInCalendarDays, isBefore, startOfDay } = require('date-fns');
 
 /**
  * Calculate number of leave days between start and end date
@@ -42,21 +41,14 @@ const getLeaveBalance = async (userId, year = new Date().getFullYear()) => {
  * @returns {Boolean} Can approve or not
  */
 const canApproveLeave = (approver, leave) => {
-    if (approver.role === 'hr_manager') {
-        return true;
-    }
-
-    if (approver.role === 'team_lead') {
-        if (leave.userId.teamId && leave.userId.teamId.toString() === approver.teamId?.toString()) {
-            return true;
-        }
-
-        if (leave.userId.managerId && leave.userId.managerId.toString() === approver._id.toString()) {
-            return true;
-        }
-    }
-
-    return false;
+    const id = value => String(value?._id || value || '');
+    if (approver.isActive === false || id(approver) === id(leave.userId)) return false;
+    if (!['pending_team_lead', 'pending_hr'].includes(leave.status)) return false;
+    if (approver.role === 'hr_manager') return true;
+    return approver.role === 'team_lead' && leave.status === 'pending_team_lead' &&
+        leave.currentStep === 'team_lead' && !!approver.teamId &&
+        id(approver.teamId) === id(leave.teamSnapshot) &&
+        (leave.approverSnapshot || []).some(a => a.role === 'team_lead' && a.active && id(a.userId) === id(approver));
 };
 
 /**
@@ -97,28 +89,13 @@ const validateLeaveDates = (startDate, endDate) => {
  * @param {Number} year - Year
  */
 const updateLeaveBalance = async (userId, numberOfDays, year = new Date().getFullYear()) => {
-    const user = await User.findById(userId);
-    if (!user) {
-        throw new Error('User not found');
-    }
-
-    const yearKey = year.toString();
-    let balance = user.leaveBalance?.get(yearKey) || { total: 12, used: 0, remaining: 12 };
-
-    balance.used += numberOfDays;
-    balance.remaining = balance.total - balance.used;
-
-    if (balance.remaining < 0) {
-        balance.remaining = 0;
-    }
-    
-    if (!user.leaveBalance) {
-        user.leaveBalance = new Map();
-    }
-    user.leaveBalance.set(yearKey, balance);
-
-    await user.save();
-    return balance;
+    const key = `leaveBalance.${year}`;
+    await User.updateOne({ _id: userId, [key]: { $exists: false } },
+        { $set: { [key]: { total: 12, used: 0, remaining: 12 } } });
+    const user = await User.findOneAndUpdate({ _id: userId, [`${key}.remaining`]: { $gte: numberOfDays } },
+        { $inc: { [`${key}.used`]: numberOfDays, [`${key}.remaining`]: -numberOfDays } }, { new: true });
+    if (!user) throw Object.assign(new Error('balance no longer sufficient'), { statusCode: 409 });
+    return user.leaveBalance.get(String(year));
 };
 
 /**

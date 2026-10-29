@@ -45,7 +45,7 @@ describe('LeaveService', () => {
 
     it('should return true for HR Manager', () => {
       const approver = { _id: hrManagerId, role: 'hr_manager' };
-      const leave = { userId: { _id: employeeId } };
+      const leave = { userId: { _id: employeeId }, status: 'pending_hr' };
 
       const result = canApproveLeave(approver, leave);
 
@@ -55,6 +55,8 @@ describe('LeaveService', () => {
     it('should return true for Team Lead approving same team member', () => {
       const approver = { _id: teamLeadId, role: 'team_lead', teamId: teamId };
       const leave = {
+        status: 'pending_team_lead', currentStep: 'team_lead', teamSnapshot: teamId,
+        approverSnapshot: [{ role: 'team_lead', userId: teamLeadId, active: true }],
         userId: {
           _id: employeeId,
           teamId: teamId
@@ -66,7 +68,7 @@ describe('LeaveService', () => {
       expect(result).toBe(true);
     });
 
-    it('should return true for Team Lead approving direct report', () => {
+    it('should deny a direct report without a submit-time approver snapshot', () => {
       const approver = { _id: teamLeadId, role: 'team_lead' };
       const leave = {
         userId: {
@@ -77,7 +79,7 @@ describe('LeaveService', () => {
 
       const result = canApproveLeave(approver, leave);
 
-      expect(result).toBe(true);
+      expect(result).toBe(false);
     });
 
     it('should return false for Team Lead approving different team member', () => {

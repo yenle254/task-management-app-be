@@ -43,10 +43,16 @@ const constants = {
   
     // Leave status
     LEAVE_STATUS: {
+      DRAFT: 'draft',
       PENDING: 'pending',
+      PENDING_TEAM_LEAD: 'pending_team_lead',
+      PENDING_HR: 'pending_hr',
       APPROVED: 'approved',
-      REJECTED: 'rejected'
+      REJECTED: 'rejected',
+      CANCELLED: 'cancelled'
     },
+    LEAVE_STEP: { TEAM_LEAD: 'team_lead', HR: 'hr' },
+    LEAVE_PENDING_STATUSES: ['pending', 'pending_team_lead', 'pending_hr'],
   
     // Attendance status
     ATTENDANCE_STATUS: {

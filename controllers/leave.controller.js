@@ -1,559 +1,109 @@
 const Leave = require('../models/leave.model');
 const User = require('../models/user.model');
 const leaveService = require('../services/leave.service');
-const { USER_ROLES, LEAVE_STATUS } = require('../utils/constants.utils');
-const {
-  notifyLeaveApproved,
-  notifyLeaveRejected,
-  notifyPendingLeave
-} = require('../services/notification.service');
+const workflow = require('../services/leave-workflow.service');
+const { LEAVE_PENDING_STATUSES } = require('../utils/constants.utils');
 
-/**
- * @desc    Submit leave request
- * @route   POST /api/leaves
- * @access  Private (Employee)
- */
+const respondError = (res, error) => res.status(error.statusCode || 500).json({ success: false, error: error.message });
+const populate = query => query.populate('userId', 'email profile teamId').populate('approvedBy', 'email profile').populate('history.by', 'email profile.fullName');
+const present = async leave => {
+    try { return await Leave.populate(leave, [
+        { path: 'userId', select: 'email profile teamId' }, { path: 'approvedBy', select: 'email profile' },
+        { path: 'history.by', select: 'email profile.fullName' }
+    ]); }
+    catch (error) { console.error('Leave response enrichment failed:', error.message); return leave; }
+};
+const filters = ({ status, type, year }) => ({
+    ...(status ? { status: workflow.pendingFilter(status) } : {}), ...(type ? { type } : {}),
+    ...(year ? { startDate: { $gte: new Date(Number(year), 0, 1), $lt: new Date(Number(year) + 1, 0, 1) } } : {})
+});
+async function teamScope(user) {
+    if (user.role !== 'team_lead') return {};
+    if (!user.teamId) return { userId: { $in: [] } };
+    const members = await User.find({ teamId: user.teamId }).select('_id').lean();
+    return { userId: { $in: members.map(member => member._id) } };
+}
 const submitLeave = async (req, res) => {
-    try {
-        const { type, startDate, endDate, reason } = req.body;
-        const userId = req.user._id;
-
-        const validation = leaveService.validateLeaveDates(startDate, endDate);
-        if (!validation.valid) {
-            return res.status(400).json({
-                success: false,
-                error: validation.message
-            });
-        }
-
-        const numberOfDays = leaveService.calculateLeaveDays(startDate, endDate);
-
-        const year = new Date(startDate).getFullYear();
-        const hasEnough = await leaveService.hasEnoughLeaveBalance(userId, numberOfDays, year);
-        if (!hasEnough) {
-            const balance = await leaveService.getLeaveBalance(userId, year);
-            return res.status(400).json({
-                success: false,
-                error: `Insufficient leave balance. You have ${balance.remaining} days remaining.`
-            });
-        }
-
-        const leave = await Leave.create({
-            userId,
-            type,
-            startDate,
-            endDate,
-            numberOfDays,
-            reason,
-            status: LEAVE_STATUS.PENDING
-        });
-
-        await leave.populate('userId', 'email profile');
-
-        // Notify HR and Team Lead about new pending leave
-        await notifyPendingLeave(leave);
-
-        res.status(201).json({
-            success: true,
-            data: leave
-        });
-    } catch (error) {
-        res.status(500).json({
-            success: false,
-            error: error.message
-        });
-    }
+    try { res.status(201).json({ success: true, data: await present(await workflow.create(req.user, req.body)) }); }
+    catch (error) { respondError(res, error); }
 };
-
-/**
- * @desc    Get current user's leave requests
- * @route   GET /api/leaves/my
- * @access  Private
- */
-const getMyLeaves = async (req, res) => {
-    try {
-        const { status, type, year } = req.query;
-        const userId = req.user._id;
-
-        const query = { userId };
-        
-        if (status) {
-            query.status = status;
-        }
-        
-        if (type) {
-            query.type = type;
-        }
-
-        if (year) {
-            const startOfYear = new Date(year, 0, 1);
-            const endOfYear = new Date(year, 11, 31, 23, 59, 59);
-            query.startDate = { $gte: startOfYear, $lte: endOfYear };
-        }
-
-        const leaves = await Leave.find(query)
-            .populate('approvedBy', 'email profile')
-            .sort({ createdAt: -1 });
-
-        res.json({
-            success: true,
-            count: leaves.length,
-            data: leaves
-        });
-    } catch (error) {
-        res.status(500).json({
-            success: false,
-            error: error.message
-        });
-    }
+const actionHandler = action => async (req, res) => {
+    try { res.json({ success: true, data: await present(await workflow.transition(req.user, req.params.id, action, req.body || {})) }); }
+    catch (error) { respondError(res, error); }
 };
+const submitDraft = actionHandler('submit'), editLeave = actionHandler('edit_resubmit');
+const approveLeave = actionHandler('approve'), rejectLeave = actionHandler('reject'), cancelLeave = actionHandler('cancel');
 
-/**
- * @desc    Get all leave requests
- * @route   GET /api/leaves
- * @access  Private (HR Manager)
- */
-const getAllLeaves = async (req, res) => {
+const list = own => async (req, res) => {
     try {
-        const { status, type, year, page = 1, limit = 10 } = req.query;
-
-        const query = {};
-        
-        if (status) {
-            query.status = status;
-        }
-        
-        if (type) {
-            query.type = type;
-        }
-
-        if (year) {
-            const startOfYear = new Date(year, 0, 1);
-            const endOfYear = new Date(year, 11, 31, 23, 59, 59);
-            query.startDate = { $gte: startOfYear, $lte: endOfYear };
-        }
-
-        const skip = (page - 1) * limit;
-        const total = await Leave.countDocuments(query);
-
-        const leaves = await Leave.find(query)
-            .populate('userId', 'email profile teamId')
-            .populate('approvedBy', 'email profile')
-            .sort({ createdAt: -1 })
-            .skip(skip)
-            .limit(parseInt(limit));
-
-        res.json({
-            success: true,
-            count: leaves.length,
-            total,
-            page: parseInt(page),
-            pages: Math.ceil(total / limit),
-            data: leaves
-        });
-    } catch (error) {
-        res.status(500).json({
-            success: false,
-            error: error.message
-        });
-    }
+        const query = { ...filters(req.query), ...(own ? { userId: req.user._id } : {}) };
+        if (!own) query.$or = [{ status: { $ne: 'draft' } }, { userId: req.user._id }];
+        const page = Number(req.query.page || 1), limit = Number(req.query.limit || 20);
+        const [data, total] = await Promise.all([
+            populate(Leave.find(query)).sort({ createdAt: -1, _id: -1 }).skip((page - 1) * limit).limit(limit).lean(),
+            Leave.countDocuments(query)
+        ]);
+        res.json({ success: true, count: data.length, total, page, pages: Math.ceil(total / limit), data });
+    } catch (error) { respondError(res, error); }
 };
-
-/**
- * @desc    Get leave by ID
- * @route   GET /api/leaves/:id
- * @access  Private
- */
+const getMyLeaves = list(true), getAllLeaves = list(false);
 const getLeaveById = async (req, res) => {
     try {
-        const leave = await Leave.findById(req.params.id)
-            .populate('userId', 'email profile teamId managerId')
-            .populate('approvedBy', 'email profile');
-
-        if (!leave) {
-            return res.status(404).json({
-                success: false,
-                error: 'Leave request not found'
-            });
-        }
-
-        const canView = 
-            leave.userId._id.toString() === req.user._id.toString() ||
-            req.user.role === USER_ROLES.HR_MANAGER ||
-            (req.user.role === USER_ROLES.TEAM_LEAD && 
-             leave.userId.teamId?.toString() === req.user.teamId?.toString());
-
-        if (!canView) {
-            return res.status(403).json({
-                success: false,
-                error: 'Not authorized to view this leave request'
-            });
-        }
-
-        res.json({
-            success: true,
-            data: leave
-        });
-    } catch (error) {
-        res.status(500).json({
-            success: false,
-            error: error.message
-        });
-    }
+        const leave = await populate(Leave.findById(req.params.id)).lean();
+        if (!leave) return res.status(404).json({ success: false, error: 'Leave request not found' });
+        const owner = workflow.id(leave.userId) === workflow.id(req.user);
+        const canView = owner || (leave.status !== 'draft' && (req.user.role === 'hr_manager' ||
+            (req.user.role === 'team_lead' && !!req.user.teamId && workflow.id(leave.userId?.teamId) === workflow.id(req.user.teamId))));
+        if (!canView) return res.status(403).json({ success: false, error: 'Not authorized to view this leave request' });
+        res.json({ success: true, data: leave });
+    } catch (error) { respondError(res, error); }
 };
-
-/**
- * @desc    Get leave statistics (count by status)
- * @route   GET /api/leaves/statistics
- * @access  Private (Team Lead, HR Manager)
- */
-const getLeaveStatistics = async (req, res) => {
-    try {
-        let query = {};
-
-        // Team lead sees only their team's leaves
-        if (req.user.role === USER_ROLES.TEAM_LEAD) {
-            const teamMembers = await User.find({ 
-                teamId: req.user.teamId 
-            }).select('_id');
-            
-            const memberIds = teamMembers.map(m => m._id);
-            query.userId = { $in: memberIds };
-        }
-
-        // Get all leaves and count by status
-        const leaves = await Leave.find(query)
-            .populate('userId', 'email profile teamId')
-            .sort({ createdAt: -1 });
-
-        const stats = {
-            pending: leaves.filter(l => l.status === LEAVE_STATUS.PENDING).length,
-            approved: leaves.filter(l => l.status === LEAVE_STATUS.APPROVED).length,
-            rejected: leaves.filter(l => l.status === LEAVE_STATUS.REJECTED).length,
-            total: leaves.length
-        };
-
-        res.json({
-            success: true,
-            data: leaves,
-            stats: stats
-        });
-    } catch (error) {
-        res.status(500).json({
-            success: false,
-            error: error.message
-        });
-    }
-};
-
-/**
- * @desc    Get pending leave requests for approval
- * @route   GET /api/leaves/pending
- * @access  Private (Team Lead, HR Manager)
- */
 const getPendingLeaves = async (req, res) => {
     try {
-        let query = { status: LEAVE_STATUS.PENDING };
-
-        if (req.user.role === USER_ROLES.TEAM_LEAD) {
-            const teamMembers = await User.find({ 
-                teamId: req.user.teamId 
-            }).select('_id');
-            
-            const memberIds = teamMembers.map(m => m._id);
-            query.userId = { $in: memberIds };
+        const query = { status: { $in: LEAVE_PENDING_STATUSES }, userId: { $ne: req.user._id } };
+        if (req.query.step) query.currentStep = req.query.step;
+        if (req.user.role === 'team_lead') {
+            Object.assign(query, await teamScope(req.user), { status: 'pending_team_lead', currentStep: 'team_lead',
+                teamSnapshot: req.user.teamId || null, approverSnapshot: { $elemMatch: { role: 'team_lead', userId: req.user._id, active: true } } });
+            const Team = require('../models/team.model');
+            const team = req.user.teamId && await Team.findById(req.user.teamId).select('leaderId').lean();
+            if (!team || workflow.id(team.leaderId) !== workflow.id(req.user) || req.query.step === 'hr') query.userId = { $in: [] };
         }
-
-        const leaves = await Leave.find(query)
-            .populate('userId', 'email profile department position')
-            .sort({ createdAt: 1 });
-
-        res.json({
-            success: true,
-            count: leaves.length,
-            data: leaves
-        });
-    } catch (error) {
-        res.status(500).json({
-            success: false,
-            error: error.message
-        });
-    }
+        const data = await populate(Leave.find(query)).sort({ createdAt: 1 }).lean();
+        res.json({ success: true, count: data.length, data });
+    } catch (error) { respondError(res, error); }
 };
-
-/**
- * @desc    Approve leave request
- * @route   PUT /api/leaves/:id/approve
- * @access  Private (Team Lead, HR Manager)
- */
-const approveLeave = async (req, res) => {
+const getLeaveStatistics = async (req, res) => {
     try {
-        const leave = await Leave.findById(req.params.id)
-            .populate('userId', 'email profile teamId managerId');
-
-        if (!leave) {
-            return res.status(404).json({
-                success: false,
-                error: 'Leave request not found'
-            });
-        }
-
-        if (leave.status !== LEAVE_STATUS.PENDING) {
-            return res.status(400).json({
-                success: false,
-                error: `Leave request already ${leave.status}`
-            });
-        }
-
-        const canApprove = leaveService.canApproveLeave(req.user, leave);
-        if (!canApprove) {
-            return res.status(403).json({
-                success: false,
-                error: 'Not authorized to approve this leave request'
-            });
-        }
-
-        leave.status = 'approved';
-        leave.approvedBy = req.user._id;
-        leave.approvedAt = new Date();
-        await leave.save();
-
-        const year = new Date(leave.startDate).getFullYear();
-        await leaveService.updateLeaveBalance(
-            leave.userId._id,
-            leave.numberOfDays,
-            year
-        );
-
-        await leave.populate('approvedBy', 'email profile');
-
-        // Notify employee about approval
-        await notifyLeaveApproved(leave, leave.userId._id);
-
-        res.json({
-            success: true,
-            message: 'Leave request approved successfully',
-            data: leave
-        });
-    } catch (error) {
-        res.status(500).json({
-            success: false,
-            error: error.message
-        });
-    }
+        const data = await populate(Leave.find({ ...await teamScope(req.user), status: { $ne: 'draft' } })).sort({ createdAt: -1 }).lean();
+        const stats = { pending: 0, approved: 0, rejected: 0, cancelled: 0, total: data.length };
+        for (const leave of data) { const key = LEAVE_PENDING_STATUSES.includes(leave.status) ? 'pending' : leave.status; if (key in stats) stats[key]++; }
+        res.json({ success: true, stats, data });
+    } catch (error) { respondError(res, error); }
 };
-
-/**
- * @desc    Reject leave request
- * @route   PUT /api/leaves/:id/reject
- * @access  Private (Team Lead, HR Manager)
- */
-const rejectLeave = async (req, res) => {
-    try {
-        const { rejectionReason } = req.body;
-        const leave = await Leave.findById(req.params.id)
-            .populate('userId', 'email profile teamId managerId');
-
-        if (!leave) {
-            return res.status(404).json({
-                success: false,
-                error: 'Leave request not found'
-            });
-        }
-
-        if (leave.status !== LEAVE_STATUS.PENDING) {
-            return res.status(400).json({
-                success: false,
-                error: `Leave request already ${leave.status}`
-            });
-        }
-
-        const canApprove = leaveService.canApproveLeave(req.user, leave);
-        if (!canApprove) {
-            return res.status(403).json({
-                success: false,
-                error: 'Not authorized to reject this leave request'
-            });
-        }
-
-        leave.status = 'rejected';
-        leave.approvedBy = req.user._id;
-        leave.approvedAt = new Date();
-        leave.rejectionReason = rejectionReason || 'No reason provided';
-        await leave.save();
-
-        await leave.populate('approvedBy', 'email profile');
-
-        // Notify employee about rejection
-        await notifyLeaveRejected(leave, leave.userId._id);
-
-        res.json({
-            success: true,
-            message: 'Leave request rejected',
-            data: leave
-        });
-    } catch (error) {
-        res.status(500).json({
-            success: false,
-            error: error.message
-        });
-    }
-};
-
-/**
- * @desc    Cancel own leave request
- * @route   DELETE /api/leaves/:id
- * @access  Private
- */
-const cancelLeave = async (req, res) => {
-    try {
-        const leave = await Leave.findById(req.params.id);
-
-        if (!leave) {
-            return res.status(404).json({
-                success: false,
-                error: 'Leave request not found'
-            });
-        }
-
-        if (leave.userId.toString() !== req.user._id.toString()) {
-            return res.status(403).json({
-                success: false,
-                error: 'Not authorized to cancel this leave request'
-            });
-        }
-
-        if (leave.status !== LEAVE_STATUS.PENDING) {
-            return res.status(400).json({
-                success: false,
-                error: 'Only pending leave requests can be cancelled'
-            });
-        }
-
-        await leave.deleteOne();
-
-        res.json({
-            success: true,
-            message: 'Leave request cancelled successfully'
-        });
-    } catch (error) {
-        res.status(500).json({
-            success: false,
-            error: error.message
-        });
-    }
-};
-
-/**
- * @desc    Get leave balance for current user
- * @route   GET /api/leaves/balance
- * @access  Private
- */
 const getLeaveBalance = async (req, res) => {
     try {
-        const { year = new Date().getFullYear() } = req.query;
-        const userId = req.user._id;
-
-        const balance = await leaveService.getLeaveBalance(userId, parseInt(year));
-
-        const startOfYear = new Date(year, 0, 1);
-        const endOfYear = new Date(year, 11, 31, 23, 59, 59);
-
-        const leaves = await Leave.find({
-            userId,
-            startDate: { $gte: startOfYear, $lte: endOfYear },
-            status: { $in: ['approved', 'pending'] }
-        }).select('type numberOfDays status startDate endDate');
-
-        res.json({
-            success: true,
-            data: {
-                year: parseInt(year),
-                balance,
-                leaves
-            }
-        });
-    } catch (error) {
-        res.status(500).json({
-            success: false,
-            error: error.message
-        });
-    }
+        const year = Number(req.query.year || new Date().getFullYear());
+        const [balance, leaves] = await Promise.all([
+            leaveService.getLeaveBalance(req.user._id, year),
+            Leave.find({ userId: req.user._id, ...filters({ year }), status: { $in: ['approved', ...LEAVE_PENDING_STATUSES] } })
+                .select('type numberOfDays status currentStep startDate endDate').lean()
+        ]);
+        res.json({ success: true, data: { year, balance, leaves } });
+    } catch (error) { respondError(res, error); }
 };
-
-/**
- * @desc    Get team leaves
- * @route   GET /api/leaves/team/:teamId
- * @access  Private (Team Lead, HR Manager)
- */
 const getTeamLeaves = async (req, res) => {
     try {
-        const { teamId } = req.params;
-        const { status, month, year = new Date().getFullYear() } = req.query;
-
-        if (req.user.role === USER_ROLES.TEAM_LEAD && req.user.teamId?.toString() !== teamId) {
-            return res.status(403).json({
-                success: false,
-                error: 'Not authorized to view this team\'s leaves'
-            });
-        }
-
-        const teamMembers = await User.find({ teamId }).select('_id');
-        const memberIds = teamMembers.map(m => m._id);
-
-        const query = {
-            userId: { $in: memberIds }
-        };
-
-        if (status) {
-            query.status = status;
-        }
-
-        if (month && year) {
-            const startOfMonth = new Date(year, month - 1, 1);
-            const endOfMonth = new Date(year, month, 0, 23, 59, 59);
-            query.startDate = { $gte: startOfMonth, $lte: endOfMonth };
-        } else if (year) {
-            const startOfYear = new Date(year, 0, 1);
-            const endOfYear = new Date(year, 11, 31, 23, 59, 59);
-            query.startDate = { $gte: startOfYear, $lte: endOfYear };
-        }
-
-        const leaves = await Leave.find(query)
-            .populate('userId', 'email profile')
-            .populate('approvedBy', 'email profile')
-            .sort({ startDate: 1 });
-
-        res.json({
-            success: true,
-            count: leaves.length,
-            data: leaves
-        });
-    } catch (error) {
-        res.status(500).json({
-            success: false,
-            error: error.message
-        });
-    }
+        if (req.user.role === 'team_lead' && workflow.id(req.user.teamId) !== req.params.teamId)
+            return res.status(403).json({ success: false, error: 'Not authorized to view this team' });
+        const members = await User.find({ teamId: req.params.teamId }).select('_id').lean();
+        const year = Number(req.query.year || new Date().getFullYear());
+        const query = { userId: { $in: members.map(member => member._id) }, ...filters({ ...req.query, year }) };
+        query.$or = [{ status: { $ne: 'draft' } }, { userId: req.user._id }];
+        if (req.query.month) query.startDate = { $gte: new Date(year, Number(req.query.month) - 1, 1), $lt: new Date(year, Number(req.query.month), 1) };
+        const data = await populate(Leave.find(query)).sort({ startDate: 1 }).lean();
+        res.json({ success: true, count: data.length, data });
+    } catch (error) { respondError(res, error); }
 };
-
-module.exports = {
-    submitLeave,
-    getMyLeaves,
-    getAllLeaves,
-    getLeaveById,
-    getPendingLeaves,
-    getLeaveStatistics,
-    approveLeave,
-    rejectLeave,
-    cancelLeave,
-    getLeaveBalance,
-    getTeamLeaves
-};
-
-
-
-
-
-
-
+module.exports = { submitLeave, submitDraft, editLeave, getMyLeaves, getAllLeaves, getLeaveById, getPendingLeaves,
+    getLeaveStatistics, approveLeave, rejectLeave, cancelLeave, getLeaveBalance, getTeamLeaves };

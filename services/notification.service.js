@@ -287,24 +287,10 @@ const notifyPendingLeave = async (leave) => {
     const title = 'New Leave Request';
     const message = `${employee.profile?.fullName || employee.email} has submitted a new leave request for ${leave.numberOfDays} day(s)`;
 
-    // Notify HR Managers
-    const hrManagers = await User.find({ role: 'hr_manager' }).select('_id');
-    const hrIds = hrManagers.map(hr => hr._id);
-
-    // Notify Team Lead of employee's team
-    if (employee.teamId) {
-      const teamLead = await User.findOne({ 
-        role: 'team_lead', 
-        teamId: employee.teamId 
-      }).select('_id');
-      
-      if (teamLead) {
-        hrIds.push(teamLead._id);
-      }
-    }
-
-    // Remove duplicates
-    const uniqueIds = [...new Set(hrIds.map(id => id.toString()))];
+    const role = leave.currentStep === 'team_lead' ? 'team_lead' : 'hr_manager';
+    const recipientIds = (leave.approverSnapshot || []).filter(a => a.active && a.role === role).map(a => a.userId);
+    const recipients = await User.find({ _id: { $in: recipientIds, $ne: employee._id }, role, isActive: true }).select('_id').lean();
+    const uniqueIds = [...new Set(recipients.map(user => user._id.toString()))];
 
     if (uniqueIds.length > 0) {
       await createBulkNotifications(

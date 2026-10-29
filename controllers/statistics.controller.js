@@ -21,7 +21,7 @@ const getOverviewStats = async (req, res) => {
         User.countDocuments({ isActive: true }),
         Team.countDocuments(),
         Task.countDocuments({ status: { $ne: "deleted" } }),
-        Leave.countDocuments({ status: "pending" }),
+        Leave.countDocuments({ status: { $in: ['pending', 'pending_team_lead', 'pending_hr'] } }),
       ]);
 
     res.json({

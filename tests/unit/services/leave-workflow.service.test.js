@@ -1,0 +1,51 @@
+const mongoose = require('mongoose');
+const Leave = require('../../../models/leave.model');
+const User = require('../../../models/user.model');
+const Team = require('../../../models/team.model');
+const { canApproveLeave } = require('../../../services/leave.service');
+const { resolveApproverSnapshot, pendingFilter } = require('../../../services/leave-workflow.service');
+const oid = () => new mongoose.Types.ObjectId();
+const requester = oid(), lead = oid(), hr = oid(), team = oid();
+const leave = { userId: requester, status: 'pending_team_lead', currentStep: 'team_lead', teamSnapshot: team,
+    approverSnapshot: [{ role: 'team_lead', userId: lead, active: true }] };
+afterEach(() => jest.restoreAllMocks());
+test.each([
+    [{ _id: lead, teamId: team, role: 'team_lead' }, {}, true],
+    [{ _id: lead, teamId: team, role: 'team_lead' }, { status: 'pending_hr', currentStep: 'hr' }, false],
+    [{ _id: oid(), teamId: team, role: 'team_lead' }, {}, false],
+    [{ _id: lead, teamId: oid(), role: 'team_lead' }, {}, false],
+    [{ _id: lead, teamId: team, role: 'team_lead', isActive: false }, {}, false],
+    [{ _id: hr, role: 'hr_manager' }, {}, true],
+    [{ _id: requester, role: 'hr_manager' }, {}, false],
+    [{ _id: hr, role: 'system_admin' }, {}, false],
+    [{ _id: hr, role: 'hr_manager' }, { status: 'approved' }, false],
+    [{ _id: hr, role: 'hr_manager' }, { status: 'rejected' }, false],
+    [{ _id: hr, role: 'hr_manager' }, { status: 'cancelled' }, false],
+    [{ _id: hr, role: 'hr_manager' }, { status: 'draft' }, false]
+])('approval policy %#', (actor, changes, allowed) => expect(canApproveLeave(actor, { ...leave, ...changes })).toBe(allowed));
+const query = value => ({ select: () => ({ lean: async () => value }) });
+test('snapshot uses Team.leaderId; inactive or missing leader skips to HR', async () => {
+    jest.spyOn(User, 'find').mockReturnValue(query([{ _id: hr }]));
+    jest.spyOn(Team, 'findById').mockReturnValue(query({ leaderId: lead }));
+    jest.spyOn(User, 'findOne').mockReturnValue(query(null));
+    const result = await resolveApproverSnapshot({ _id: requester, role: 'employee', teamId: team });
+    expect(result.status).toBe('pending_hr');
+    expect(User.findOne).toHaveBeenCalledWith(expect.objectContaining({ _id: lead, isActive: true }));
+});
+test('Team Lead requester skips their own step and HR requester has only other HR', async () => {
+    jest.spyOn(User, 'find').mockReturnValue(query([{ _id: hr }]));
+    for (const role of ['team_lead', 'hr_manager']) {
+        const result = await resolveApproverSnapshot({ _id: requester, role, teamId: team });
+        expect(result.currentStep).toBe('hr');
+        expect(User.find).toHaveBeenLastCalledWith(expect.objectContaining({ _id: { $ne: requester } }));
+    }
+});
+test('no HR and system admin submissions fail with a business conflict', async () => {
+    jest.spyOn(User, 'find').mockReturnValue(query([]));
+    await expect(resolveApproverSnapshot({ _id: requester, role: 'hr_manager' })).rejects.toMatchObject({ statusCode: 409 });
+    await expect(resolveApproverSnapshot({ _id: requester, role: 'system_admin' })).rejects.toMatchObject({ statusCode: 409 });
+});
+test('legacy pending query spans both steps and schema only accepts the new state machine', () => {
+    expect(pendingFilter('pending').$in).toEqual(['pending', 'pending_team_lead', 'pending_hr']);
+    expect(Leave.schema.path('status').enumValues).toEqual(['draft', 'pending_team_lead', 'pending_hr', 'approved', 'rejected', 'cancelled']);
+});

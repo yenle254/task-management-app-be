@@ -280,7 +280,7 @@ describe('statistics.service', () => {
 
             expect(stats.pendingLeaves).toBe(3);
             expect(stats.employeesOnLeave).toBe(0);
-            expect(countSpy).toHaveBeenCalledWith({ status: LEAVE_STATUS.PENDING });
+            expect(countSpy).toHaveBeenCalledWith({ status: { $in: ['pending', 'pending_team_lead', 'pending_hr'] } });
         });
 
         test('uses the explicit range for approved leave overlap', async () => {

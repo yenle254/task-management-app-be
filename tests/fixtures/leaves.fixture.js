@@ -14,9 +14,14 @@ const createMockLeave = (overrides = {}) => {
     startDate: new Date(Date.now() + 86400000), // tomorrow
     endDate: new Date(Date.now() + 172800000), // day after tomorrow
     reason: 'Personal vacation',
-    status: 'pending',
-    reviewedBy: null,
-    reviewedAt: null,
+    status: 'pending_team_lead',
+    currentStep: 'team_lead',
+    revision: 0,
+    history: [],
+    approverSnapshot: [],
+    numberOfDays: 2,
+    approvedBy: null,
+    approvedAt: null,
     rejectionReason: null,
     createdAt: new Date(),
     updatedAt: new Date()
@@ -31,21 +36,23 @@ const createMockLeave = (overrides = {}) => {
 const mockLeaves = {
   pending: createMockLeave({
     type: 'vacation',
-    status: 'pending'
+    status: 'pending_team_lead'
   }),
 
   approved: createMockLeave({
     type: 'sick',
     status: 'approved',
-    reviewedBy: new mongoose.Types.ObjectId(),
-    reviewedAt: new Date()
+    currentStep: null,
+    approvedBy: new mongoose.Types.ObjectId(),
+    approvedAt: new Date()
   }),
 
   rejected: createMockLeave({
     type: 'personal',
     status: 'rejected',
-    reviewedBy: new mongoose.Types.ObjectId(),
-    reviewedAt: new Date(),
+    currentStep: null,
+    approvedBy: new mongoose.Types.ObjectId(),
+    approvedAt: new Date(),
     rejectionReason: 'Team requires your presence during this period'
   })
 };
@@ -58,7 +65,7 @@ const LEAVE_TYPES = ['sick', 'vacation', 'personal'];
 /**
  * Leave statuses
  */
-const LEAVE_STATUSES = ['pending', 'approved', 'rejected'];
+const LEAVE_STATUSES = ['draft', 'pending_team_lead', 'pending_hr', 'approved', 'rejected', 'cancelled'];
 
 module.exports = {
   createMockLeave,
