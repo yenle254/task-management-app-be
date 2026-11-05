@@ -25,11 +25,15 @@ const {
 
 router.use(protect);
 
-// Clockin
+// Keep both spellings while clients migrate to the documented kebab-case URLs.
 router.post('/clockin', clockInValidation, validateRequest, asyncHandler(clockIn));
+router.post('/clock-in', clockInValidation, validateRequest, asyncHandler(clockIn));
 
 // Clockout
 router.post('/clockout', asyncHandler(clockOut));
+router.put('/clockout', asyncHandler(clockOut));
+router.post('/clock-out', asyncHandler(clockOut));
+router.put('/clock-out', asyncHandler(clockOut));
 
 // Get my attendance records
 router.get('/my', getAttendanceValidation, validateRequest, asyncHandler(getMyAttendance));
@@ -39,6 +43,7 @@ router.get('/today', asyncHandler(getTodayAttendance));
 
 // Get attendance by date range
 router.get('/date', authorize(USER_ROLES.TEAM_LEAD, USER_ROLES.HR_MANAGER), asyncHandler(getAttendanceByDate));
+router.get('/date/:date', authorize(USER_ROLES.TEAM_LEAD, USER_ROLES.HR_MANAGER), asyncHandler(getAttendanceByDate));
 
 // Get all attendance records (HR Manager only)
 router.get('/', authorize(USER_ROLES.HR_MANAGER), getAttendanceValidation, validateRequest, asyncHandler(getAllAttendance));

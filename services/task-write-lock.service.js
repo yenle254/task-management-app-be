@@ -57,4 +57,6 @@ const withTaskWriteLock = async (operation, responseFailed = () => false) => {
   }
 };
 
-module.exports = { withTaskWriteLock, journalTaskSave };
+// Used only inside the same locked controller invocation, before the response flush.
+const getTaskBeforeImage = taskId => writes.getStore()?.undo.find(entry => String(entry.taskId) === String(taskId))?.before;
+module.exports = { withTaskWriteLock, journalTaskSave, getTaskBeforeImage };
