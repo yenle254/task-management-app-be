@@ -24,7 +24,7 @@ const io = new Server(server, {
   },
 });
 
-connectDB();
+const databaseReady = connectDB();
 
 // Request ID must be registered before any other middleware so all requests
 // (including 404s, parser errors, and global error handler) have a requestId.
@@ -52,7 +52,6 @@ if (process.env.NODE_ENV === "development") {
     next();
   });
 }
-
 app.get("/", (req, res) => {
   res.json({
     success: true,
@@ -101,7 +100,9 @@ app.use("/api/offices", generalLimiter, officeRoutes);
 app.use("/api/statistics", generalLimiter, statisticsRoutes);
 app.use("/api/employees", generalLimiter, employeeRoutes);
 app.use("/api/admin", adminRoutes);
+const { setupSwagger } = require("./config/swagger.config");
 app.use("/uploads", express.static(path.join(__dirname, "uploads")));
+setupSwagger(app);
 
 app.use((req, res, next) => {
   res.status(404).json({
@@ -118,6 +119,15 @@ app.use(errorHandler);
 
 const socketHandler = require("./utils/socket-handler.utils");
 socketHandler(io);
+const notificationService = require('./services/notification.service');
+const reminderScheduler = require('./services/reminder-scheduler.service');
+notificationService.initDelivery(io);
+databaseReady.then(() => reminderScheduler.start(io)).catch(error => {
+  logger.error('Reminder startup failed', { name: error.name });
+});
+server.on('close', () => reminderScheduler.stop());
+process.once('SIGINT', () => reminderScheduler.stop());
+process.once('SIGTERM', () => reminderScheduler.stop());
 
 const PORT = process.env.PORT;
 server.listen(PORT, () => {

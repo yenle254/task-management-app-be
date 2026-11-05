@@ -19,3 +19,10 @@ npm-debug.log*
 # OS files
 .DS_Store
 Thumbs.db
+
+# Runtime uploads (user files served from /uploads)
+uploads/
+
+# Vendored swagger-ui source checked out for local reference (not used by the
+# server; /api-docs uses swagger-ui-express or the CDN fallback)
+public/

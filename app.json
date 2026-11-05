@@ -1,0 +1,12 @@
+{
+  "expo": {
+    "extra": {
+      "eas": {
+        "projectId": "31f26517-73ac-4800-b7bd-38ae98a857f9"
+      }
+    },
+    "android": {
+      "package": "com.yenle25404.server"
+    }
+  }
+}
