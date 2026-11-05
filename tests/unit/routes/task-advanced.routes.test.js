@@ -1,3 +1,4 @@
+jest.mock('../../../models/audit-log.model', () => ({ create: jest.fn().mockResolvedValue({}) }));
 const express = require('express');
 jest.mock('../../../services/task-write-lock.service', () => ({ withTaskWriteLock: operation => operation(), journalTaskSave: async () => {} }));
 const request = require('supertest');

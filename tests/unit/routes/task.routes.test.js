@@ -1,5 +1,6 @@
+jest.mock('../../../models/audit-log.model', () => ({ create: jest.fn().mockResolvedValue({}) }));
 const express = require('express');
-jest.mock('../../../services/task-write-lock.service', () => ({ withTaskWriteLock: operation => operation(), journalTaskSave: async () => {} }));
+jest.mock('../../../services/task-write-lock.service', () => ({ withTaskWriteLock: operation => operation(), journalTaskSave: async () => {}, getTaskBeforeImage: () => null }));
 const request = require('supertest');
 const mongoose = require('mongoose');
 const User = require('../../../models/user.model');

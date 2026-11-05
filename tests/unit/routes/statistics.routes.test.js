@@ -1,3 +1,4 @@
+jest.mock('../../../models/audit-log.model', () => ({ create: jest.fn().mockResolvedValue({}) }));
 const express = require('express');
 const request = require('supertest');
 const mongoose = require('mongoose');

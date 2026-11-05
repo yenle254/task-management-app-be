@@ -3,7 +3,7 @@ const Leave = require('../../../models/leave.model');
 const User = require('../../../models/user.model');
 const Team = require('../../../models/team.model');
 const { canApproveLeave } = require('../../../services/leave.service');
-const { resolveApproverSnapshot, pendingFilter } = require('../../../services/leave-workflow.service');
+const { resolveApproverSnapshot, pendingFilter, transition } = require('../../../services/leave-workflow.service');
 const oid = () => new mongoose.Types.ObjectId();
 const requester = oid(), lead = oid(), hr = oid(), team = oid();
 const leave = { userId: requester, status: 'pending_team_lead', currentStep: 'team_lead', teamSnapshot: team,
@@ -24,6 +24,14 @@ test.each([
     [{ _id: hr, role: 'hr_manager' }, { status: 'draft' }, false]
 ])('approval policy %#', (actor, changes, allowed) => expect(canApproveLeave(actor, { ...leave, ...changes })).toBe(allowed));
 const query = value => ({ select: () => ({ lean: async () => value }) });
+
+test.each(['employee', 'team_lead', 'hr_manager', 'system_admin'])('draft cancellation is owner-only for %s, before any write', async role => {
+    const draft = { _id: oid(), userId: requester, status: 'draft', revision: 0, currentStep: null, operation: null };
+    jest.spyOn(Leave, 'findById').mockReturnValue({ lean: async () => draft });
+    const claim = jest.spyOn(Leave, 'findOneAndUpdate');
+    await expect(transition({ _id: hr, role }, draft._id, 'cancel', { revision: 0 })).rejects.toMatchObject({ statusCode: 403 });
+    expect(claim).not.toHaveBeenCalled();
+});
 test('snapshot uses Team.leaderId; inactive or missing leader skips to HR', async () => {
     jest.spyOn(User, 'find').mockReturnValue(query([{ _id: hr }]));
     jest.spyOn(Team, 'findById').mockReturnValue(query({ leaderId: lead }));

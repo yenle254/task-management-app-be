@@ -135,6 +135,8 @@ async function main() {
             assert.equal((await request('hr', 'PUT', `/${direct._id}/approve`, {})).data.status, 'approved');
         });
         await check('missing/inactive/moved leader routes HR; historical snapshot not reassigned', async () => {
+            // This group must not depend on the earlier draft group restoring its balance.
+            await setBalance('peer');
             await User.updateOne({ _id: users.lead._id }, { $set: { isActive: false } });
             assert.equal((await create()).status, 'pending_hr');
             await User.updateOne({ _id: users.lead._id }, { $set: { isActive: true } });
