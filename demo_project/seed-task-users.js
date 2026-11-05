@@ -389,6 +389,21 @@ async function seedTasks(u, t) {
     if (_meta.watchers) task.watchers = _meta.watchers.map(ref);
     await task.save();
   }
+  // Review samples use real history, including a completed rejection round.
+  for (const [index, status] of ['in_review', 'in_review', 'in_progress'].entries()) {
+    const at = hoursAgo(index === 0 ? 30 : 2);
+    const task = await Task.create({ title: `[demo] Review sample ${index + 1}`, status,
+      assignedBy: u.lead1._id, assignedTo: [u.member1._id], teamId: teamA,
+      progress: 100, dueDate: daysFromNow(2), tags: [DEMO_TAG, 'review'],
+      review: { submittedBy: u.member1._id, submittedAt: at, note: 'Ready for review', currentRound: 1,
+        approverSnapshot: [{ userId: u.lead1._id, role: 'team_lead', active: true, resolvedAt: at }],
+        rounds: [{ round: 1, type: 'submitted', by: u.member1._id, at, note: 'Ready for review' },
+          ...(status === 'in_progress' ? [{ round: 1, type: 'changes_requested', by: u.lead1._id, at: new Date(), reason: 'Add edge-case tests' }] : [])] },
+      statusHistory: [{ from: 'in_progress', to: 'in_review', at, by: u.member1._id, teamId: teamA, assignedTo: [u.member1._id] },
+        ...(status === 'in_progress' ? [{ from: 'in_review', to: 'in_progress', at: new Date(), by: u.lead1._id, teamId: teamA, assignedTo: [u.member1._id] }] : [])]
+    });
+    created.push(task);
+  }
   return created;
 }
 

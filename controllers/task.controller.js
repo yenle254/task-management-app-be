@@ -1,10 +1,11 @@
+const reviewService = require('../services/task-review.service');
 const Task = require('../models/task.model');
 const audit = require('../services/audit.service');
 const { getTaskBeforeImage } = require('../services/task-write-lock.service');
 const stageTaskAudit = (res, action, task) => {
   const before = audit.snapshot('task', getTaskBeforeImage(task._id));
   const after = audit.snapshot('task', task);
-  const fields = action === 'task.deleted' ? audit.FIELDS.task : audit.FIELDS.task.filter(field => field !== 'status');
+  const fields = before?.status !== 'in_review' && ['task.updated', 'task.assigned'].includes(action) ? audit.FIELDS.task.filter(field => field !== 'status') : audit.FIELDS.task;
   const changes = audit.diff(before, after, fields);
   if (action === 'task.updated' && !changes.length) return;
   res.locals ||= {};
@@ -214,10 +215,10 @@ const getTaskById = async (req, res) => {
     const task = await Task.findById(req.params.id)
       .populate('assignedBy', 'profile.fullName profile.position profile.avatar email')
       .populate('assignedTo', 'profile.fullName profile.position profile.avatar email')
-      .populate('teamId', 'name')
+      .populate('teamId', 'name leaderId')
       .populate('comments.userId', 'profile.fullName profile.position profile.avatar email')
       .populate('statusHistory.by', advanced.USER_FIELDS)
-      .populate('watchers timeEntries.userId', advanced.USER_FIELDS);
+      .populate('watchers timeEntries.userId review.submittedBy review.rounds.by', advanced.USER_FIELDS);
 
     if (!task || task.status === TASK_STATUS.DELETED) {
       return res.status(404).json({
@@ -234,7 +235,7 @@ const getTaskById = async (req, res) => {
 
     res.json({
       success: true,
-      data: enrichTask(task, true)
+      data: { ...enrichTask(task, true), reviewPermissions: { canSubmit: reviewService.isAssignee(req.user, task), canDecide: await reviewService.canDecide(req.user, task) } }
     });
   } catch (error) {
     console.error('Get task by ID error:', error);
@@ -260,6 +261,20 @@ const updateTask = async (req, res) => {
     if (!canUserAccessTask(req.user, task)) {
       return res.status(403).json({ success: false, error: 'Not authorized' });
     }
+
+    const ownershipChange = req.body.teamId !== undefined || req.body.assignedTo !== undefined;
+    if (ownershipChange) {
+      if (req.user.role !== USER_ROLES.HR_MANAGER) throw advanced.fail('Only HR can change task ownership here', 403);
+      const nextTeam = req.body.teamId || task.teamId;
+      const ids = [...new Set((req.body.assignedTo || task.assignedTo).map(advanced.idOf))];
+      if (!ids.length || !await Team.exists({ _id: nextTeam })) throw advanced.fail('Invalid task team or assignees');
+      if (await User.countDocuments({ _id: { $in: ids }, teamId: nextTeam, isActive: true }) !== ids.length) throw advanced.fail('All assignees must be active members of the task team');
+      if (advanced.idOf(nextTeam) !== advanced.idOf(task.teamId) && (task.parentTaskId || task.dependencies?.length || await Task.exists({ $or: [{ parentTaskId: task._id }, { dependencies: task._id }] }))) throw advanced.fail('Detach parent, children and dependencies before changing team');
+      if (task.status === 'in_review' && Object.keys(req.body).some(key => !['teamId', 'assignedTo'].includes(key))) throw advanced.fail('Only ownership can change while awaiting review', 409);
+      task.teamId = nextTeam;
+      task.assignedTo = ids;
+      await reviewService.resetAssignment(req.user, task);
+    } else reviewService.assertNotInReview(task);
 
     const sensitiveFields = ['priority', 'dueDate', 'startDate', 'tags', 'difficulty', 'estimatedMinutes', 'storyPoints'];
     if (sensitiveFields.some(field => req.body[field] !== undefined) && !canCreateOrAssignTask(req.user)) {
@@ -311,6 +326,7 @@ const deleteTask = async (req, res) => {
 
     task.$locals.previousStatus = task.status;
     task.$locals.statusChangedBy = req.user._id;
+    if (task.status === 'in_review') task.review.rounds.push({ round: task.review.currentRound, type: 'cancelled', by: req.user._id, at: new Date() });
     task.status = TASK_STATUS.DELETED;
     await task.save();
 
@@ -350,6 +366,8 @@ const assignTask = async (req, res) => {
       return res.status(404).json({ success: false, error: 'Task not found' });
     }
 
+    if (task.status === 'in_review' && req.user.role !== USER_ROLES.HR_MANAGER) throw advanced.fail('Only HR can reassign a task awaiting review', 403);
+
     // Team lead can only assign tasks within their own team
     if (req.user.role === USER_ROLES.TEAM_LEAD) {
       if (!req.user.teamId) {
@@ -381,6 +399,7 @@ const assignTask = async (req, res) => {
     const existingAssigneeSet = new Set(task.assignedTo.map((id) => id.toString()));
     const newAssignees = uniqueAssignees.filter((id) => !existingAssigneeSet.has(id));
     task.assignedTo = uniqueAssignees;
+    await reviewService.resetAssignment(req.user, task);
     await task.save();
 
     // Notify new assignees
@@ -425,6 +444,11 @@ const updateTaskStatus = async (req, res) => {
       return res.status(404).json({ success: false, error: 'Task not found' });
     }
 
+    if (status === TASK_STATUS.DONE) {
+      if (task.status !== 'in_review') throw advanced.fail('Task must be submitted for review before it can be completed. Use submit then approve.');
+      return require('./task-review.controller').approveReview(req, res);
+    }
+    reviewService.assertNotInReview(task);
     if (!canUpdateTaskStatus(req.user, task)) {
       return res.status(403).json({ success: false, error: 'Not authorized' });
     }
@@ -515,6 +539,7 @@ const updateTaskProgress = async (req, res) => {
       return res.status(403).json({ success: false, error: 'Not authorized' });
     }
 
+    reviewService.assertNotInReview(task);
     task.progress = progress;
 
     // Auto-update status based on progress
@@ -522,8 +547,7 @@ const updateTaskProgress = async (req, res) => {
     task.$locals.previousStatus = previousStatus;
     task.$locals.statusChangedBy = req.user._id;
     if (progress === TASK_PROGRESS.DONE_THRESHOLD && task.status !== TASK_STATUS.DONE) {
-      task.status = TASK_STATUS.DONE;
-      task.completedAt = new Date();
+      task.status = TASK_STATUS.IN_PROGRESS;
     } else if (progress > TASK_PROGRESS.IN_PROGRESS_THRESHOLD && task.status === TASK_STATUS.TODO) {
       task.status = TASK_STATUS.IN_PROGRESS;
     } else if (progress < TASK_PROGRESS.IN_PROGRESS_THRESHOLD && task.status === TASK_STATUS.IN_PROGRESS) {
@@ -582,7 +606,7 @@ const getTeamTasks = async (req, res) => {
     const tasks = await Task.find(query)
       .populate('assignedBy', 'profile.fullName profile.position profile.avatar email')
       .populate('assignedTo', 'profile.fullName profile.position profile.avatar email')
-      .populate('teamId', 'name')
+      .populate('teamId', 'name leaderId')
       .sort({ createdAt: -1 })
       .skip(skip)
       .limit(parseInt(limit));
@@ -663,7 +687,7 @@ const getOverdueTasks = async (req, res) => {
     const { forTeam = false } = req.query;
 
     const query = {
-      status: { $in: ['todo', 'in_progress'] },
+      status: { $in: ['todo', 'in_progress', 'in_review'] },
       dueDate: { $lt: new Date() }
     };
 
@@ -744,6 +768,7 @@ const addAttachment = async (req, res) => {
       });
     }
 
+    reviewService.assertNotInReview(task);
     // Add attachment to task
     task.attachments.push({
       name: req.file.originalname,
@@ -811,6 +836,7 @@ const addAttachmentBulk = async (req, res) => {
       });
     }
 
+    reviewService.assertNotInReview(task);
     // Save attachment info to task
     const attachments = req.files.map(file => ({
       name: file.originalname,
@@ -884,6 +910,7 @@ const createSubtask = async (req, res) => {
       updatedAt: new Date()
     };
 
+    reviewService.assertNotInReview(task);
     task.subTasks.push(newSubtask);
     task.$locals.statusChangedBy = req.user._id;
     await task.save(); // This will trigger the pre-save hook to recalculate progress
@@ -937,6 +964,7 @@ const toggleSubtask = async (req, res) => {
     }
 
     // Find the subtask
+    reviewService.assertNotInReview(task);
     const subtask = mongoose.Types.ObjectId.isValid(subtaskId) ? task.subTasks.id(subtaskId) : null;
     if (!subtask) {
       return res.status(404).json({ 
@@ -1012,6 +1040,7 @@ const updateSubtask = async (req, res) => {
       });
     }
 
+    reviewService.assertNotInReview(task);
     const subtask = mongoose.Types.ObjectId.isValid(subtaskId) ? task.subTasks.id(subtaskId) : null;
     if (!subtask) {
       return res.status(404).json({ 
@@ -1079,6 +1108,7 @@ const deleteSubtask = async (req, res) => {
       });
     }
 
+    reviewService.assertNotInReview(task);
     const subtask = mongoose.Types.ObjectId.isValid(subtaskId) ? task.subTasks.id(subtaskId) : null;
     if (!subtask) {
       return res.status(404).json({ 

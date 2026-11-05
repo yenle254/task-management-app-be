@@ -57,6 +57,22 @@ async function tick(now = new Date()) {
         overdue ? 'task_overdue' : 'deadline_reminder', overdue ? 'Task overdue' : 'Deadline approaching',
         `Task "${task.title}" ${overdue ? 'is overdue' : 'is due within 24 hours'}.`, task._id);
     }
+    for await (const candidate of Task.find({ status: 'in_review', 'review.submittedAt': { $lt: new Date(now.getTime() - DAY) },
+      'review.remindedAt': null }).select('_id').lean().cursor()) {
+      await require('./task-write-lock.service').withTaskWriteLock(async () => {
+        const task = await Task.findById(candidate._id);
+        if (!task || task.status !== 'in_review' || task.review.remindedAt || !task.review.submittedAt || now - task.review.submittedAt < DAY) return;
+        task.review.remindedAt = now;
+        await task.save();
+        for (const entry of task.review.approverSnapshot || []) {
+          if (entry.active === false || task.assignedTo.some(id => String(id) === String(entry.userId))) continue;
+          await claimAndNotify(entry.userId, `review_${task._id}_${task.review.currentRound}`, now,
+            'task_review_reminder', 'Review reminder', `Task "${task.title}" has been awaiting review for over 24 hours.`, task._id);
+        }
+        const audit = require('./audit.service');
+        audit.recordSystem({ action: 'task.review_reminder', target: audit.target('task', task), metadata: { round: task.review.currentRound } });
+      });
+    }
     for await (const leave of Leave.find({ status: 'approved', startDate: { $gte: now, $lte: new Date(now.getTime() + DAY) } })
       .select('userId startDate').lean().cursor()) {
       await claimAndNotify(leave.userId, `leave_starting_${leave._id}`, now, 'leave_starting', 'Leave starting soon',

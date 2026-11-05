@@ -1,6 +1,12 @@
 const notificationHelper = {
     // Notification type configurations
     types: {
+      TASK_SUBMITTED_FOR_REVIEW: { type: 'task_submitted_for_review', icon: '📋', color: '#6941C6', title: 'Task awaiting review' },
+      TASK_REVIEW_APPROVED: { type: 'task_review_approved', icon: '📋', color: '#6941C6', title: 'Task approved' },
+      TASK_REVIEW_REQUESTED: { type: 'task_review_requested', icon: '📋', color: '#6941C6', title: 'Changes requested' },
+      TASK_REVIEW_WITHDRAWN: { type: 'task_review_withdrawn', icon: '📋', color: '#6941C6', title: 'Submission withdrawn' },
+      TASK_REVIEW_REMINDER: { type: 'task_review_reminder', icon: '📋', color: '#6941C6', title: 'Review reminder' },
+
       TASK_OVERDUE: { type: 'task_overdue', icon: '⏳', color: '#e67e22', title: 'Task overdue' },
       ATTENDANCE_REMINDER: { type: 'attendance_reminder', icon: '🕐', color: '#34495e', title: 'Attendance reminder' },
       LEAVE_STARTING: { type: 'leave_starting', icon: '📅', color: '#9b59b6', title: 'Leave starting soon' },

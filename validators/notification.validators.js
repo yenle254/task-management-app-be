@@ -6,7 +6,12 @@
 const { body, param, query } = require('express-validator');
 
 const VALID_NOTIFICATION_TYPES = [
-  'task_assigned',
+  'task_submitted_for_review',
+      'task_review_approved',
+      'task_review_requested',
+      'task_review_withdrawn',
+      'task_review_reminder',
+      'task_assigned',
   'task_updated',
   'task_completed',
   'comment_added',
@@ -89,6 +94,14 @@ const preferencesValidation = [body().custom(value => {
       for (const [category, channels] of Object.entries(setting)) {
         if (!['task', 'leave', 'attendance'].includes(category) || !object(channels)) throw new Error('Invalid category');
         for (const [channel, enabled] of Object.entries(channels)) {
+          if (channel === 'types' && category === 'task') {
+            if (!object(enabled)) throw new Error('Invalid notification types');
+            for (const [type, settings] of Object.entries(enabled)) {
+              if (!require('../utils/notification-preferences.helper').REVIEW_TYPES.includes(type) || !object(settings)) throw new Error('Invalid notification type');
+              for (const [name, value] of Object.entries(settings)) if (!['inApp', 'push'].includes(name) || typeof value !== 'boolean') throw new Error('Invalid notification channel');
+            }
+            continue;
+          }
           if (!['inApp', 'push'].includes(channel) || typeof enabled !== 'boolean') throw new Error('Invalid channel');
         }
       }

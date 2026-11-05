@@ -61,7 +61,8 @@ const UserSchema = new mongoose.Schema(
       push: { type: Boolean, default: true },
       sound: { type: Boolean, default: true },
       categories: {
-        task: { inApp: { type: Boolean, default: true }, push: { type: Boolean, default: true } },
+        task: { inApp: { type: Boolean, default: true }, push: { type: Boolean, default: true },
+          types: Object.fromEntries(require('../utils/notification-preferences.helper').REVIEW_TYPES.map(type => [type, { inApp: { type: Boolean, default: undefined }, push: { type: Boolean, default: undefined } }])) },
         leave: { inApp: { type: Boolean, default: true }, push: { type: Boolean, default: true } },
         attendance: { inApp: { type: Boolean, default: true }, push: { type: Boolean, default: true } }
       },

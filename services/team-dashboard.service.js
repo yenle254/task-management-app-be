@@ -179,7 +179,7 @@ const getTeamMemberProgress = async (team, startDate, endDate) => {
   }
 
   const tasks = await Task.find(taskQuery)
-    .select('status dueDate statusHistory createdAt assignedTo')
+    .select('status dueDate statusHistory createdAt assignedTo review.submittedBy')
     .lean();
 
   // Bucket tasks by assignee (a task may have several assignees).
@@ -226,6 +226,7 @@ const getTeamMemberProgress = async (team, startDate, endDate) => {
       totalTasks,
       completedTasks,
       inProgressTasks,
+      awaitingReviewTasks: memberTasks.filter(t => t.status === TASK_STATUS.IN_REVIEW).length,
       todoTasks,
       overdueTasks,
       completionRate: percentage(completedTasks, totalTasks),
@@ -256,6 +257,7 @@ const getTeamPerformance = async (team) => {
   const byStatus = {
     todo: 0,
     in_progress: 0,
+    in_review: 0,
     done: 0
   };
   for (const t of tasks) {
@@ -301,8 +303,11 @@ const getTeamPerformance = async (team) => {
       total: totalTasks,
       todo: byStatus.todo,
       inProgress: byStatus.in_progress,
+      inReview: byStatus.in_review,
       done: byStatus.done
     },
+    inReviewTasks: byStatus.in_review,
+    pendingApproval: tasks.filter(t => t.status === TASK_STATUS.IN_REVIEW && !(t.assignedTo || []).some(id => String(id) === String(team.leaderId?._id || team.leaderId))).length,
     completionRate: percentage(byStatus.done, totalTasks),
     overdueRate: percentage(overdueCount, totalTasks),
     overdueCount,

@@ -47,6 +47,7 @@ const getTaskStats = async (userId) => {
           total: { $sum: 1 },
           todo: { $sum: { $cond: [{ $eq: ['$status', 'todo'] }, 1, 0] } },
           in_progress: { $sum: { $cond: [{ $eq: ['$status', 'in_progress'] }, 1, 0] } },
+          in_review: { $sum: { $cond: [{ $eq: ['$status', 'in_review'] }, 1, 0] } },
           done: { $sum: { $cond: [{ $eq: ['$status', 'done'] }, 1, 0] } },
           overdue: {
             $sum: {
@@ -67,10 +68,10 @@ const getTaskStats = async (userId) => {
       }
     ]);
 
-    return stats[0] || { total: 0, todo: 0, in_progress: 0, done: 0, overdue: 0 };
+    return stats[0] || { total: 0, todo: 0, in_progress: 0, in_review: 0, done: 0, overdue: 0 };
   } catch (error) {
     console.error('Get task stats error:', error);
-    return { total: 0, todo: 0, in_progress: 0, done: 0, overdue: 0 };
+    return { total: 0, todo: 0, in_progress: 0, in_review: 0, done: 0, overdue: 0 };
   }
 };
 
@@ -87,7 +88,8 @@ const canUserAccessTask = (user, task) => {
   const isTeamLeadSameTeam = user.role === 'team_lead' &&
     user.teamId && task.teamId && idOf(user.teamId) === idOf(task.teamId);
 
-  return isCreator || isAssignee || isHR || isTeamLeadSameTeam;
+  const isReviewLead = user.role === 'team_lead' && (idOf(task.teamId?.leaderId) === idOf(user) || task.review?.approverSnapshot?.some(entry => entry.active !== false && entry.role === 'team_lead' && idOf(entry.userId) === idOf(user)));
+  return isCreator || isAssignee || isHR || isTeamLeadSameTeam || isReviewLead;
 };
 
 /**
@@ -152,7 +154,7 @@ const validateTaskData = (taskData) => {
  */
 const enrichTask = (task, includeOverdue = true) => {
   const taskObj = task.toObject ? task.toObject() : task;
-  const enriched = { ...taskObj };
+  const enriched = { ...taskObj, review: { rounds: [], currentRound: 0, submittedBy: null, submittedAt: null, ...taskObj.review } };
   delete enriched.pendingAttachmentDeletes;
 
   if (includeOverdue) {

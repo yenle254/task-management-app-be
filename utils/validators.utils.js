@@ -64,7 +64,7 @@ const validators = {
      * @returns {Boolean}
      */
     isValidTaskStatus: (status) => {
-      return ['todo', 'in_progress', 'done', 'deleted'].includes(status);
+      return ['todo', 'in_progress', 'in_review', 'done', 'deleted'].includes(status);
     },
   
     /**

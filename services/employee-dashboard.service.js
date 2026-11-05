@@ -126,6 +126,10 @@ const getEmployeeDashboard = async (userId, query = {}) => {
       User.findById(userId).select('leaveBalance').lean()
     ]);
 
+  const [awaitingReviewCount, submittedByMeCount] = await Promise.all([
+    Task.countDocuments({ ...baseScope, status: TASK_STATUS.IN_REVIEW }),
+    Task.countDocuments({ ...baseScope, status: TASK_STATUS.IN_REVIEW, 'review.submittedBy': userId })
+  ]);
   const rawWorkHours = attendanceAgg[0]?.totalWorkHours ?? 0;
   const workHours = Number.isFinite(rawWorkHours) && rawWorkHours >= 0 ? rawWorkHours : 0;
   const attendanceDays = attendanceAgg[0]?.attendanceDays ?? 0;
@@ -145,7 +149,9 @@ const getEmployeeDashboard = async (userId, query = {}) => {
       source,
       days: Math.round((endDate - startDate) / (24 * 60 * 60 * 1000)) + 1
     },
+    awaitingReviewCount, submittedByMeCount,
     tasks: {
+      awaitingReviewCount, submittedByMeCount,
       inProgress: inProgressTasks,
       completed: completedTasks,
       overdue: overdueTasks

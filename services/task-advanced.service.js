@@ -60,6 +60,7 @@ const resolveParentTask = async (taskId, parentTaskId) => {
   const [task, parent] = await Promise.all([model().findById(taskId), model().findById(parentTaskId)]);
   if (!parent || parent.status === 'deleted') return { ok: false, error: 'Parent task not found' };
   if (!task || task.status === 'deleted') return { ok: false, error: 'Task not found' };
+  if (parent.status === 'in_review') return { ok: false, error: 'Cannot change children of a task awaiting review' };
   if (parent.parentTaskId) return { ok: false, error: 'Only one parent-child level is allowed' };
   if (idOf(parent.teamId) !== idOf(task.teamId)) return { ok: false, error: 'Parent must belong to the same team' };
   if ((await getTaskChildren(taskId)).length) return { ok: false, error: 'A task with children cannot become a child' };
@@ -130,7 +131,7 @@ const syncParentTask = async (parentId, actor) => {
   const children = await getTaskChildren(parentId);
   if (!children.length) return;
   const allowed = await canCompleteTask(parent);
-  const nextStatus = allowed.ok ? 'done' : parent.status === 'done' ? 'in_progress' : parent.status;
+  const nextStatus = allowed.ok ? (['done', 'in_review'].includes(parent.status) ? parent.status : 'in_progress') : parent.status === 'done' ? 'in_progress' : parent.status;
   if (parent.status === nextStatus) return;
   parent.$locals.previousStatus = parent.status;
   parent.$locals.statusChangedBy = actor;

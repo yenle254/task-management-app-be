@@ -401,6 +401,7 @@ const getTaskStats = async (filter) => {
     // New explicit metrics.
     totalTasks,
     doneTasks,
+    awaitingReview: statusMap[TASK_STATUS.IN_REVIEW] || 0,
     openTasks,
     overdueTasks,
     completionRate: percentage(doneTasks, totalTasks),

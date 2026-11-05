@@ -190,7 +190,7 @@ const percentage = (numerator, denominator, decimals = 2) => {
  * `deleted` is excluded by the schema enum itself.
  */
 const TERMINAL_STATUSES = [TASK_STATUS.DONE];
-const OPEN_STATUSES = [TASK_STATUS.TODO, TASK_STATUS.IN_PROGRESS];
+const OPEN_STATUSES = [TASK_STATUS.TODO, TASK_STATUS.IN_PROGRESS, TASK_STATUS.IN_REVIEW];
 
 /**
  * Build a MongoDB date filter for a range, applying it to the given field.

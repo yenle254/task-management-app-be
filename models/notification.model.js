@@ -5,6 +5,11 @@ const NotificationSchema = new mongoose.Schema({
   type: {
     type: String,
     enum: [
+      'task_submitted_for_review',
+      'task_review_approved',
+      'task_review_requested',
+      'task_review_withdrawn',
+      'task_review_reminder',
       'task_assigned',
       'task_updated',
       'task_completed',

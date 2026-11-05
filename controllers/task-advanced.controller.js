@@ -5,7 +5,8 @@ const { parseDate } = require('../utils/dashboard.helper');
 
 const loadTask = async (req) => {
   const task = service.assertTaskNotDeleted(await Task.findById(req.params.id));
-  if (!canUserAccessTask(req.user, task)) throw service.fail('Not authorized', 403);
+  if (!canUserAccessTask(req.user, task) && !await require('../services/task-review.service').canDecide(req.user, task)) throw service.fail('Not authorized', 403);
+  if (!['GET', 'HEAD'].includes(req.method)) require('../services/task-review.service').assertNotInReview(task);
   return task;
 };
 const saveTask = async (task, user) => {
@@ -30,6 +31,7 @@ exports.setParentTask = withTask(async (req, res, task) => {
   if (!result.ok) throw service.fail(result.error);
   if (!canUserAccessTask(req.user, result.parent)) throw service.fail('Not authorized to access parent', 403);
   const previous = task.parentTaskId;
+  if (previous) { const oldParent = await Task.findById(previous); if (oldParent) require('../services/task-review.service').assertNotInReview(oldParent); }
   task.parentTaskId = result.parent._id;
   const data = await saveTask(task, req.user);
   if (previous && service.idOf(previous) !== service.idOf(task.parentTaskId)) await service.syncParentTask(previous, req.user._id);
@@ -37,6 +39,7 @@ exports.setParentTask = withTask(async (req, res, task) => {
 });
 exports.removeParentTask = withTask(async (req, res, task) => {
   const previous = task.parentTaskId;
+  if (previous) { const oldParent = await Task.findById(previous); if (oldParent) require('../services/task-review.service').assertNotInReview(oldParent); }
   task.parentTaskId = null;
   const data = await saveTask(task, req.user);
   await service.syncParentTask(previous, req.user._id);
@@ -166,7 +169,7 @@ exports.getBoard = async (req, res) => {
   const query = await viewScope(req, true);
   if (!req.query.includeSubtasks) query.parentTaskId = null;
   const tasks = await Task.find(query).populate('assignedTo assignedBy', service.USER_FIELDS).lean();
-  const data = { todo: [], in_progress: [], done: [] };
+  const data = { todo: [], in_progress: [], in_review: [], done: [] };
   for (const task of enrichTasks(tasks)) if (data[task.status]) data[task.status].push(task);
   const counts = {};
   for (const status of Object.keys(data)) {

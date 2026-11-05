@@ -54,7 +54,7 @@ function record(req = {}, event = {}) {
     const doc = { at: new Date(), action: event.action, ...catalog, outcome: event.outcome || 'success',
       actor: { id: objectId(actor?._id), role: text(actor?.role), name: text(actor?.profile?.fullName), email: text(actor?.email) },
       target: { type: text(event.target?.type, 40), id: objectId(event.target?.id), label: text(event.target?.label) },
-      changes, reason: text(event.reason), metadata: bounded(redactMeta(event.metadata)), context: context(req) };
+      changes, reason: text(event.reason, event.action === 'task.review_rejected' ? 1000 : 500), metadata: bounded(redactMeta(event.metadata)), context: context(req) };
     // No mutable request/document is retained by the deferred insert or its catch.
     const failureMeta = { action: doc.action, requestId: doc.context.requestId };
     setImmediate(() => {

@@ -9,7 +9,7 @@ const AuditLogSchema = new mongoose.Schema({
   actor: { id: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null }, role: String, name: String, email: String },
   target: { type: { type: String, default: null }, id: { type: mongoose.Schema.Types.ObjectId, default: null }, label: { type: String, maxlength: 500, default: null } },
   changes: [{ field: String, from: mongoose.Schema.Types.Mixed, to: mongoose.Schema.Types.Mixed, _id: false }],
-  reason: { type: String, maxlength: 500, default: null },
+  reason: { type: String, maxlength: 1000, default: null },
   metadata: mongoose.Schema.Types.Mixed,
   context: { requestId: String, ip: { type: String, maxlength: 64 }, userAgent: { type: String, maxlength: 512, default: null }, method: String, route: String }
 }, { collection: 'audit_logs', versionKey: false });
