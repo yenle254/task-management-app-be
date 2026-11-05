@@ -119,12 +119,12 @@ test('status/progress transitions keep actors and old response contracts', async
   jest.spyOn(Task, 'findById').mockResolvedValue(task);
   expect((await call('put', `/${task._id}/status`).send({ status: 'in_progress' })).body.data.status).toBe('in_progress');
   expect(task.$locals.statusChangedBy).toEqual(owner);
-  expect((await call('put', `/${task._id}/status`).send({ status: 'done' })).body.data.status).toBe('done');
-  expect(task.completedAt).toBeInstanceOf(Date);
+  expect((await call('put', `/${task._id}/status`).send({ status: 'done' })).status).toBe(400);
+  expect(task.completedAt).toBeNull();
   expect((await call('put', `/${task._id}/status`).send({ status: 'todo' })).body.data.completedAt).toBeNull();
   expect((await call('put', `/${task._id}/progress`).send({ progress: 35 })).body.data.progress).toBe(35);
   expect(task.status).toBe('in_progress');
-  expect((await call('put', `/${task._id}/progress`).send({ progress: 100 })).body.data.status).toBe('done');
+  expect((await call('put', `/${task._id}/progress`).send({ progress: 100 })).body.data.status).toBe('in_progress');
   expect((await call('put', `/${task._id}/progress`).send({ progress: 20 })).body.data.status).toBe('in_progress');
   expect((await call('delete', `/${task._id}`)).body.message).toBe('Task deleted successfully');
   expect(task.status).toBe('deleted');

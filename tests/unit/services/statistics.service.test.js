@@ -346,7 +346,7 @@ describe('statistics.service', () => {
             expect(stats.doneTasks).toBe(3);
             expect(stats.openTasks).toBe(1);
             expect(stats.completionRate).toBe(75);
-            expect(overdueSpy).toHaveBeenCalledWith(expect.objectContaining({ status: { $in: [TASK_STATUS.TODO, TASK_STATUS.IN_PROGRESS] } }));
+            expect(overdueSpy).toHaveBeenCalledWith(expect.objectContaining({ status: { $in: [TASK_STATUS.TODO, TASK_STATUS.IN_PROGRESS, TASK_STATUS.IN_REVIEW] } }));
         });
 
         test('intersects selected task status with open statuses for overdue count', async () => {

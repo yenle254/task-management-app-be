@@ -30,6 +30,24 @@ test('online receives one socket event and no push', async () => {
   expect(emit).toHaveBeenCalledTimes(1); expect(emit).toHaveBeenCalledWith('notification_created', { notification });
   expect(axios.post).not.toHaveBeenCalled();
 });
+test('review type switches are independent and cannot override a disabled task category', async () => {
+  const review = { ...notification, type: 'task_submitted_for_review' };
+  user.notificationPreferences.categories.task.types.task_submitted_for_review = { inApp: false, push: true };
+  isUserOnline.mockReturnValue(true); await delivery.deliver(review); expect(emit).not.toHaveBeenCalled();
+  isUserOnline.mockReturnValue(false); await delivery.deliver(review);
+  expect(axios.post.mock.calls[0][1].data.target).toBe('task_review_inbox');
+  axios.post.mockClear(); user.notificationPreferences.categories.task.push = false;
+  await delivery.deliver(review); expect(axios.post).not.toHaveBeenCalled();
+});
+test('legacy review preferences inherit category switches and review routing distinguishes recipients', () => {
+  const { typeChannels } = require('../../../utils/notification-preferences.helper');
+  const prefs = preferences({ categories: { task: { inApp: false, push: true } } });
+  expect(typeChannels(prefs, 'task_review_approved')).toEqual({ inApp: false, push: true });
+  expect(targetFor('task_review_approved')).toBe('task_detail');
+  expect(targetFor('task_review_requested')).toBe('task_detail');
+  expect(targetFor('task_review_withdrawn')).toBe('task_review_inbox');
+  expect(targetFor('task_review_reminder')).toBe('task_review_inbox');
+});
 test('offline receives push with account-scoped routing payload', async () => {
   isUserOnline.mockReturnValue(false); await delivery.deliver(notification);
   expect(emit).not.toHaveBeenCalled(); expect(axios.post).toHaveBeenCalledTimes(1);

@@ -262,6 +262,7 @@ describe('team-dashboard.service', () => {
                 total: 0,
                 todo: 0,
                 inProgress: 0,
+                inReview: 0,
                 done: 0
             });
             expect(perf.completionRate).toBe(0);
@@ -284,6 +285,7 @@ describe('team-dashboard.service', () => {
                 total: 3,
                 todo: 1,
                 inProgress: 1,
+                inReview: 0,
                 done: 1
             });
             expect(perf.completionRate).toBeCloseTo(33.33, 1);

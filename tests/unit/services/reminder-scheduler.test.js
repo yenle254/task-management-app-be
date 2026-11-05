@@ -13,7 +13,7 @@ const query = value => ({ select() { return this; }, lean() { return this; }, th
 let users, tasks, leaves, attendance, claims;
 beforeEach(() => {
   users = [{ _id: 'u', role: 'employee' }]; tasks = []; leaves = []; attendance = null; claims = new Set();
-  User.find.mockImplementation(() => query(users)); Task.find.mockImplementation(() => query(tasks)); Leave.find.mockImplementation(() => query(leaves));
+  User.find.mockImplementation(() => query(users)); Task.find.mockImplementation(filter => query(filter.status === 'in_review' ? [] : tasks)); Leave.find.mockImplementation(() => query(leaves));
   Office.findOne.mockImplementation(() => query(null)); Attendance.findOne.mockImplementation(() => query(attendance)); Leave.exists.mockResolvedValue(null);
   User.updateOne.mockResolvedValue({});
   User.findOneAndUpdate.mockImplementation(filter => { const key = JSON.stringify(filter); const result = claims.has(key) ? null : { _id: 'u' }; claims.add(key); return query(result); });

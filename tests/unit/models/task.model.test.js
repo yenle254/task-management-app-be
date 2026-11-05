@@ -48,7 +48,8 @@ describe('Task model status history', () => {
     describe('pre-save hook', () => {
         test('blocks explicit completion and preserves history when dependencies are unfinished', async () => {
             const task = buildTask({ status: 'done', dependencies: [new mongoose.Types.ObjectId()] });
-            task.$locals.previousStatus = 'todo';
+            task.$locals.previousStatus = 'in_review';
+            task.$locals.reviewApproved = true;
             jest.spyOn(Task, 'find').mockReturnValue({ select() { return this; }, lean: async () => [{ title: 'Pending', status: 'todo' }] });
             await expect(runSaveHooks(task)).rejects.toThrow('blocked by');
             expect(task.statusHistory).toHaveLength(0);
@@ -108,6 +109,7 @@ describe('Task model status history', () => {
             const task = buildTask({ status: 'todo' });
             task.$locals.previousStatus = 'todo';
             task.$locals.statusChangedBy = actor;
+            task.$locals.reviewApproved = true;
             task.status = 'done';
 
             await runSaveHooks(task);
@@ -120,6 +122,7 @@ describe('Task model status history', () => {
             const teamId = task.teamId;
             const assignee = task.assignedTo[0];
             task.$locals.previousStatus = 'todo';
+            task.$locals.reviewApproved = true;
             task.status = 'done';
 
             await runSaveHooks(task);
@@ -141,6 +144,7 @@ describe('Task model status history', () => {
         test('does not add duplicate history for the same transition', async () => {
             const task = buildTask({ status: 'todo' });
             task.$locals.previousStatus = 'todo';
+            task.$locals.reviewApproved = true;
             task.status = 'done';
 
             await runSaveHooks(task);
@@ -154,6 +158,7 @@ describe('Task model status history', () => {
 
             // First completion.
             task.$locals.previousStatus = 'todo';
+            task.$locals.reviewApproved = true;
             task.status = 'done';
             await runSaveHooks(task);
 
@@ -164,6 +169,7 @@ describe('Task model status history', () => {
 
             // Completed again.
             task.$locals.previousStatus = 'in_progress';
+            task.$locals.reviewApproved = true;
             task.status = 'done';
             await runSaveHooks(task);
 
@@ -183,6 +189,7 @@ describe('Task model status history', () => {
             const task = buildTask({ status: 'todo' });
 
             task.$locals.previousStatus = 'todo';
+            task.$locals.reviewApproved = true;
             task.status = 'done';
             await runSaveHooks(task);
             expect(task.completedAt).toBeInstanceOf(Date);
@@ -200,15 +207,15 @@ describe('Task model status history', () => {
                 { title: 'one', isCompleted: true },
                 { title: 'two', isCompleted: true }
             ];
-            task.status = 'done';
+
 
             await runSaveHooks(task);
 
-            expect(task.status).toBe('done');
+            expect(task.status).toBe('in_progress');
             expect(task.statusHistory).toHaveLength(1);
             expect(task.statusHistory[0]).toMatchObject({
                 from: 'todo',
-                to: 'done'
+                to: 'in_progress'
             });
         });
 

@@ -32,7 +32,7 @@ afterEach(() => jest.restoreAllMocks());
 const call = (method, path, body) => request(app)[method](`/api/tasks/${task._id}${path}`).set('Authorization', 'Bearer test').send(body);
 const view = path => request(app).get(`/api/tasks/${path}`).set('Authorization', 'Bearer test');
 test('literal view routes are reachable, enforce roles and default self identity', async () => {
-  expect((await view('board')).body).toMatchObject({ success: true, counts: { todo: 0, done: 0, in_progress: 0 } });
+  expect((await view('board')).body).toMatchObject({ success: true, counts: { todo: 0, done: 0, in_progress: 0, in_review: 0 } });
   expect((await view('watching/me')).body).toMatchObject({ success: true, count: 0 });
   user.role = 'employee';
   expect((await view('board')).status).toBe(403);

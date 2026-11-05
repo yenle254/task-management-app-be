@@ -103,7 +103,9 @@ test('child lifecycle completes and reopens parent through save with actor and p
   jest.spyOn(Task, 'findById').mockResolvedValue(parent);
   const find = jest.spyOn(Task, 'find').mockReturnValue(chain([{ status: 'done' }]));
   await service.syncParentTask(parent._id, actor);
-  expect(parent.status).toBe('done');
+  expect(parent.status).toBe('in_progress');
+  // A previously approved parent reopens when a child becomes incomplete.
+  parent.status = 'done';
   expect(parent.$locals).toMatchObject({ previousStatus: 'todo', statusChangedBy: actor });
   find.mockReturnValue(chain([{ status: 'in_progress' }]));
   await service.syncParentTask(parent._id, actor);
