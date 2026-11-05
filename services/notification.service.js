@@ -1,5 +1,6 @@
 const Notification = require('../models/notification.model');
 const User = require('../models/user.model');
+const { deliver, initDelivery } = require('./notification-delivery.service');
 
 /**
  * Create a new notification
@@ -21,6 +22,7 @@ const createNotification = async (userId, type, title, message, relatedId = null
       isRead: false
     });
 
+    await deliver(notification);
     return notification;
   } catch (error) {
     console.error('Create notification error:', error);
@@ -39,7 +41,7 @@ const createNotification = async (userId, type, title, message, relatedId = null
  */
 const createBulkNotifications = async (userIds, type, title, message, relatedId = null) => {
   try {
-    const notifications = userIds.map(userId => ({
+    const notifications = [...new Set(userIds.map(String))].map(userId => ({
       userId,
       type,
       title,
@@ -49,6 +51,8 @@ const createBulkNotifications = async (userIds, type, title, message, relatedId 
     }));
 
     const result = await Notification.insertMany(notifications);
+    // Sequential delivery bounds outbound connections without introducing a queue.
+    for (const notification of result) await deliver(notification);
     return result;
   } catch (error) {
     console.error('Create bulk notifications error:', error);
@@ -107,7 +111,7 @@ const notifyTaskUpdated = async (task, updaterId) => {
     }
 
     // Also notify task creator
-    if (task.assignedBy.toString() !== updaterId.toString()) {
+    if (task.assignedBy.toString() !== updaterId.toString() && !userIds.includes(task.assignedBy.toString())) {
       await createNotification(
         task.assignedBy,
         'task_updated',
@@ -182,7 +186,7 @@ const notifyTaskCompleted = async (task, completerId) => {
     }
 
     // Always notify task creator if not the completer
-    if (task.assignedBy.toString() !== completerId.toString()) {
+    if (task.assignedBy.toString() !== completerId.toString() && !userIds.includes(task.assignedBy.toString())) {
       await createNotification(
         task.assignedBy,
         'task_completed',
@@ -394,6 +398,7 @@ const deleteAllNotifications = async (userId) => {
 
 
 module.exports = {
+  initDelivery,
   createNotification,
   createBulkNotifications,
   notifyTaskAssigned,

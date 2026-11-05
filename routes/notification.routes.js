@@ -25,6 +25,12 @@ router.use(protect);
 // Frequently-called read endpoints use the higher-volume notification
 // limiter to prevent legitimate badge polling from being throttled.
 const readRateLimit = notificationReadLimiter;
+const settings = require('../controllers/notification-settings.controller');
+const { registerPushTokenValidation, preferencesValidation } = require('../validators/notification.validators');
+router.post('/push-token', readRateLimit, registerPushTokenValidation, validateRequest, settings.registerPushToken);
+router.delete('/push-token', readRateLimit, settings.unregisterPushToken);
+router.get('/preferences', readRateLimit, settings.getPreferences);
+router.put('/preferences', readRateLimit, preferencesValidation, validateRequest, settings.updatePreferences);
 
 // Notifications CRUD
 router.get('/', readRateLimit, getNotificationsValidation, validateRequest, asyncHandler(getMyNotifications));

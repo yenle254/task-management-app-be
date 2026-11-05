@@ -12,6 +12,9 @@ const { NOTIFICATION_TYPES } = require('../utils/constants.utils');
 
 // Notification type -> Model mapping
 const TYPE_MODEL_MAP = {
+  [NOTIFICATION_TYPES.TASK_OVERDUE]: 'task',
+  [NOTIFICATION_TYPES.LEAVE_STARTING]: 'leave',
+  [NOTIFICATION_TYPES.ATTENDANCE_REMINDER]: null,
   [NOTIFICATION_TYPES.TASK_ASSIGNED]: 'task',
   [NOTIFICATION_TYPES.TASK_UPDATED]: 'task',
   [NOTIFICATION_TYPES.COMMENT_ADDED]: 'task',
@@ -78,7 +81,7 @@ const getMyNotifications = async (req, res) => {
     const userId = req.user._id;
 
     const query = { userId };
-    if (unreadOnly === 'true') {
+    if (unreadOnly === 'true' || unreadOnly === true) {
       query.isRead = false;
     }
 

@@ -1,6 +1,9 @@
 const notificationHelper = {
     // Notification type configurations
     types: {
+      TASK_OVERDUE: { type: 'task_overdue', icon: '⏳', color: '#e67e22', title: 'Task overdue' },
+      ATTENDANCE_REMINDER: { type: 'attendance_reminder', icon: '🕐', color: '#34495e', title: 'Attendance reminder' },
+      LEAVE_STARTING: { type: 'leave_starting', icon: '📅', color: '#9b59b6', title: 'Leave starting soon' },
       TASK_ASSIGNED: {
         type: 'task_assigned',
         icon: '📌',

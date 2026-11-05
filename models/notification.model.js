@@ -10,6 +10,9 @@ const NotificationSchema = new mongoose.Schema({
       'task_completed',
       'comment_added',
       'deadline_reminder',
+      'task_overdue',
+      'attendance_reminder',
+      'leave_starting',
       'leave_approved',
       'leave_rejected',
       'leave_pending'
@@ -32,4 +35,7 @@ const NotificationSchema = new mongoose.Schema({
 });
 
 
+NotificationSchema.index({ userId: 1, isRead: 1 });
+NotificationSchema.index({ userId: 1, createdAt: -1 });
+NotificationSchema.index({ userId: 1, type: 1 });
 module.exports = mongoose.model('Notification', NotificationSchema);
