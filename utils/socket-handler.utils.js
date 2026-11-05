@@ -17,7 +17,7 @@ const socketHandler = (io) => {
       const decoded = jwt.verify(token, process.env.JWT_SECRET);
       const user = await User.findById(decoded.id).select('-password');
       
-      if (!user) {
+      if (!user || !user.isActive) {
         return next(new Error('User not found'));
       }
 
@@ -31,7 +31,9 @@ const socketHandler = (io) => {
   io.on('connection', (socket) => {
     //console.log(`User connected: ${socket.user.email} (${socket.id})`);
  
-    onlineUsers.set(socket.user._id.toString(), socket.id);
+    const userId = socket.user._id.toString();
+    if (!onlineUsers.has(userId)) onlineUsers.set(userId, new Set());
+    onlineUsers.get(userId).add(socket.id);
     io.emit('user_online', { 
       userId: socket.user._id.toString(),
       email: socket.user.email 
@@ -195,7 +197,10 @@ const socketHandler = (io) => {
     socket.on('disconnect', () => {
       //console.log(`User disconnected: ${socket.user.email} (${socket.id})`);
       
-      onlineUsers.delete(socket.user._id.toString());
+      const connections = onlineUsers.get(userId);
+      connections?.delete(socket.id);
+      if (connections?.size) return;
+      onlineUsers.delete(userId);
       
       io.emit('user_offline', { 
         userId: socket.user._id.toString(),
@@ -210,4 +215,5 @@ const socketHandler = (io) => {
 };
 
 module.exports = socketHandler;
+module.exports.isUserOnline = userId => Boolean(onlineUsers.get(String(userId))?.size);
 
