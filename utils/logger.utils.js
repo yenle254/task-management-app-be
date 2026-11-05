@@ -20,28 +20,7 @@ const CONFIGURED_LEVEL = (process.env.LOG_LEVEL || getDefaultLevel()).toLowerCas
 
 const RESERVED = new Set(['timestamp', 'level', 'service', 'environment', 'message']);
 
-const SENSITIVE_KEY_PATTERN = /^(password|token|authorization|cookie|refresh[_-]?token|otp|access[_-]?token|id[_-]?token)$/i;
-
-function redactValue(value) {
-  return '[REDACTED]';
-}
-
-function redactMeta(meta) {
-  if (!meta || typeof meta !== 'object') return meta;
-  if (meta instanceof Error) return meta; // preserve Error identity for summary
-  if (Array.isArray(meta)) return meta.map(redactMeta);
-  const out = {};
-  for (const [k, v] of Object.entries(meta)) {
-    if (SENSITIVE_KEY_PATTERN.test(k)) {
-      out[k] = redactValue(v);
-    } else if (v && typeof v === 'object') {
-      out[k] = redactMeta(v);
-    } else {
-      out[k] = v;
-    }
-  }
-  return out;
-}
+const { redactMeta } = require('./redact.utils');
 
 function summarizeError(err) {
   if (!err) return null;
