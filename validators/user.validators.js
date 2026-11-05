@@ -80,7 +80,7 @@ const updateUserValidation = [
 
   body('role')
     .optional()
-    .isIn(['system_admin', 'hr_manager', 'team_lead', 'employee']).withMessage('Invalid role'),
+    .isIn(['team_lead', 'employee']).withMessage('Role must be either employee or team_lead'),
 
   body('teamId')
     .optional()

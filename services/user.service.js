@@ -1,4 +1,5 @@
 const User = require("../models/user.model");
+const Team = require("../models/team.model");
 
 /**
  * Get all users with pagination and filters
@@ -85,6 +86,41 @@ const updateUser = async (userId, updateData) => {
       sanitizedData[field] = updateData[field];
     }
   });
+
+  if (updateData.role !== undefined) {
+    if (!["employee", "team_lead"].includes(updateData.role)) {
+      const err = new Error("HR Manager can only assign employee or team_lead role");
+      err.statusCode = 400;
+      throw err;
+    }
+
+    const existingUser = await User.findById(userId);
+    if (!existingUser) {
+      return null;
+    }
+
+    if (
+      !["employee", "team_lead"].includes(existingUser.role) &&
+      updateData.role !== existingUser.role
+    ) {
+      const err = new Error("Cannot change role of HR Manager or System Admin");
+      err.statusCode = 400;
+      throw err;
+    }
+
+    if (existingUser.role === "team_lead" && updateData.role === "employee") {
+      const leadingTeam = await Team.findOne({ leaderId: userId }).select("_id");
+      if (leadingTeam) {
+        const err = new Error(
+          "Cannot change role to employee while user is leading a team. Assign a new team leader first."
+        );
+        err.statusCode = 400;
+        throw err;
+      }
+    }
+
+    sanitizedData.role = updateData.role;
+  }
 
   const user = await User.findByIdAndUpdate(
     userId,

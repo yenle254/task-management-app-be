@@ -1,3 +1,4 @@
+const audit = require('../services/audit.service');
 const Team = require("../models/team.model");
 const User = require("../models/user.model");
 const userService = require("../services/user.service");
@@ -72,6 +73,7 @@ const updateUser = async (req, res) => {
   try {
     const userId = req.params.id;
     const updateData = req.body;
+    const before = await User.findById(userId).select(audit.FIELDS.user.join(' ') + ' profile.fullName').lean();
     const user = await userService.updateUser(userId, updateData);
     if (!user) {
       return res.status(404).json({
@@ -79,12 +81,13 @@ const updateUser = async (req, res) => {
         message: "User not found",
       });
     }
+    audit.changed(req, req.body.role !== undefined && before?.role !== user.role ? 'user.role_changed' : 'user.updated', 'user', before, user, { reason: audit.text(req.body?.reason) || 'No reason provided' });
     res.status(200).json({
       success: true,
       data: user,
     });
   } catch (error) {
-    res.status(500).json({
+    res.status(error.statusCode || 500).json({
       success: false,
       error: error.message,
     });
@@ -99,6 +102,7 @@ const updateUser = async (req, res) => {
 const deleteUser = async (req, res) => {
   try {
     const userId = req.params.id;
+    const before = await User.findById(userId).select(audit.FIELDS.user.join(' ') + ' profile.fullName').lean();
     const user = await userService.deleteUser(userId);
     if (!user) {
       return res.status(404).json({
@@ -106,6 +110,7 @@ const deleteUser = async (req, res) => {
         message: "User not found",
       });
     }
+    audit.changed(req, 'user.deactivated', 'user', before, user, { reason: audit.text(req.body?.reason) });
     res.status(200).json({
       success: true,
       data: user,

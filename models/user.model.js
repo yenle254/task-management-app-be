@@ -53,6 +53,22 @@ const UserSchema = new mongoose.Schema(
       default: null,
     },
     isActive: { type: Boolean, default: true, index: true },
+    pushToken: { type: String, default: null, select: false },
+    pushTokenPlatform: { type: String, enum: ['android', 'ios', 'web'], default: null },
+    pushTokenUpdatedAt: { type: Date, default: null },
+    notificationPreferences: {
+      master: { type: Boolean, default: true },
+      push: { type: Boolean, default: true },
+      sound: { type: Boolean, default: true },
+      categories: {
+        task: { inApp: { type: Boolean, default: true }, push: { type: Boolean, default: true } },
+        leave: { inApp: { type: Boolean, default: true }, push: { type: Boolean, default: true } },
+        attendance: { inApp: { type: Boolean, default: true }, push: { type: Boolean, default: true } }
+      },
+      reminderTimes: { clockIn: { type: String, default: null }, clockOut: { type: String, default: null } }
+    },
+    // Internal, durable claim-before-send receipts. Never accepted from the client.
+    reminders: { type: Map, of: new mongoose.Schema({ firedAt: Date, refKey: String }, { _id: false }), default: {}, select: false },
     leaveBalance: {
       type: Map,
       of: {
