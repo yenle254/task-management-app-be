@@ -1,8 +1,9 @@
-require('dotenv').config();
+const path = require('path');
+require('dotenv').config({ path: path.join(__dirname, '..') });
 const mongoose = require('mongoose');
 const bcrypt = require('bcryptjs');
-const User = require('./models/user.model');
-const Team = require('./models/team.model');
+const User = require('../models/user.model');
+const Team = require('../models/team.model');
 
 const PASSWORD = 'Test@123';
 const YEAR = String(new Date().getFullYear());
