@@ -11,6 +11,7 @@ const constants = {
     TASK_STATUS: {
       TODO: 'todo',
       IN_PROGRESS: 'in_progress',
+      IN_REVIEW: 'in_review',
       DONE: 'done',
       DELETED: 'deleted'
     },
@@ -27,6 +28,12 @@ const constants = {
       TASK_ASSIGNED: 'task_assigned',
       TASK_UPDATED: 'task_updated',
       TASK_COMPLETED: 'task_completed',
+      TASK_SUBMITTED_FOR_REVIEW: 'task_submitted_for_review',
+      TASK_REVIEW_APPROVED: 'task_review_approved',
+      TASK_REVIEW_REQUESTED: 'task_review_requested',
+      TASK_REVIEW_WITHDRAWN: 'task_review_withdrawn',
+      TASK_REVIEW_REMINDER: 'task_review_reminder',
+
       COMMENT_ADDED: 'comment_added',
       DEADLINE_REMINDER: 'deadline_reminder',
         TASK_OVERDUE: 'task_overdue',
@@ -170,6 +177,11 @@ constants.AUDIT_ACTIONS = Object.freeze({
   'office.updated': { category: 'office', severity: 'warning' },
   'office.activated': { category: 'office', severity: 'warning' },
   'office.deleted': { category: 'office', severity: 'warning' },
+  'task.submitted_for_review': { category: 'task', severity: 'info' },
+  'task.review_approved': { category: 'task', severity: 'info' },
+  'task.review_rejected': { category: 'task', severity: 'warning' },
+  'task.review_withdrawn': { category: 'task', severity: 'info' },
+  'task.review_reminder': { category: 'task', severity: 'info' },
   'task.created': { category: 'task', severity: 'info' },
   'task.updated': { category: 'task', severity: 'warning' },
   'task.assigned': { category: 'task', severity: 'warning' },

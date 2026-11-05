@@ -99,6 +99,8 @@ const createTaskValidation = [
  * Validation chain for updating a task
  */
 const updateTaskValidation = [
+  body('teamId').optional().isMongoId(),
+  body('assignedTo').optional().isArray({ min: 1 }), body('assignedTo.*').optional().isMongoId(),
   ...tagRules(), ...estimateRules(),
   body('difficulty').optional().isIn(['easy', 'medium', 'hard']),
   body('removedAttachments').optional().isArray(),
@@ -285,7 +287,7 @@ const getTasksValidation = [
 
   query('status')
     .optional()
-    .isIn(['todo', 'in_progress', 'done']).withMessage('Invalid status'),
+    .isIn(['todo', 'in_progress', 'in_review', 'done']).withMessage('Invalid status'),
 
   query('priority')
     .optional()
@@ -311,7 +313,7 @@ const getTeamTasksValidation = [
 
   query('status')
     .optional()
-    .isIn(['todo', 'in_progress', 'done']).withMessage('Invalid status')
+    .isIn(['todo', 'in_progress', 'in_review', 'done']).withMessage('Invalid status')
 ];
 
 /**
@@ -352,7 +354,14 @@ const taskViewValidation = (rangeRequired = false) => [
     query().custom(value => { resolveRange(value.from, value.to, true); return true; })] : [])
 ];
 
+const reviewValidation = (reason = false) => [param('id').isMongoId(),
+  body('note').optional().isString().bail().trim().isLength({ max: 500 }),
+  ...(reason ? [body('reason').isString().bail().trim().isLength({ min: 1, max: 1000 }).withMessage('A reason is required when requesting changes')] : [])];
+const pendingApprovalValidation = [query('page').optional().isInt({ min: 1 }).toInt(),
+  query('limit').optional().isInt({ min: 1, max: 100 }).toInt(), query('teamId').optional().isMongoId(),
+  query('overdueSla').optional().isBoolean().toBoolean()];
 module.exports = {
+  reviewValidation, pendingApprovalValidation,
   advancedTaskValidation, taskViewValidation,
   createTaskValidation,
   updateTaskValidation,

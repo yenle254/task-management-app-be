@@ -1,0 +1,341 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "Task Review API",
+    "version": "1.0.0"
+  },
+  "paths": {
+    "/api/tasks/{id}/submit": {
+      "post": {
+        "tags": [
+          "Tasks"
+        ],
+        "summary": "Submit task review",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "note": {
+                    "type": "string",
+                    "maxLength": 500
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Updated task"
+          },
+          "400": {
+            "description": "Invalid input or blocked completion"
+          },
+          "403": {
+            "description": "Forbidden, including self-review"
+          },
+          "404": {
+            "description": "Task not found"
+          },
+          "409": {
+            "description": "Review changed or writes busy"
+          }
+        }
+      }
+    },
+    "/api/tasks/{id}/approve": {
+      "post": {
+        "tags": [
+          "Tasks"
+        ],
+        "summary": "Approve task review",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "note": {
+                    "type": "string",
+                    "maxLength": 500
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Updated task"
+          },
+          "400": {
+            "description": "Invalid input or blocked completion"
+          },
+          "403": {
+            "description": "Forbidden, including self-review"
+          },
+          "404": {
+            "description": "Task not found"
+          },
+          "409": {
+            "description": "Review changed or writes busy"
+          }
+        }
+      }
+    },
+    "/api/tasks/{id}/request-changes": {
+      "post": {
+        "tags": [
+          "Tasks"
+        ],
+        "summary": "Request changes task review",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "reason": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 1000
+                  }
+                },
+                "required": [
+                  "reason"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Updated task"
+          },
+          "400": {
+            "description": "Invalid input or blocked completion"
+          },
+          "403": {
+            "description": "Forbidden, including self-review"
+          },
+          "404": {
+            "description": "Task not found"
+          },
+          "409": {
+            "description": "Review changed or writes busy"
+          }
+        }
+      }
+    },
+    "/api/tasks/{id}/withdraw": {
+      "post": {
+        "tags": [
+          "Tasks"
+        ],
+        "summary": "Withdraw task review",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "note": {
+                    "type": "string",
+                    "maxLength": 500
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Updated task"
+          },
+          "400": {
+            "description": "Invalid input or blocked completion"
+          },
+          "403": {
+            "description": "Forbidden, including self-review"
+          },
+          "404": {
+            "description": "Task not found"
+          },
+          "409": {
+            "description": "Review changed or writes busy"
+          }
+        }
+      }
+    },
+    "/api/tasks/pending-approval": {
+      "get": {
+        "tags": [
+          "Tasks"
+        ],
+        "summary": "Review inbox",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "page",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100
+            }
+          },
+          {
+            "name": "teamId",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "overdueSla",
+            "in": "query",
+            "schema": {
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Scoped pending approvals or pending/overdueSla/byTeam statistics"
+          },
+          "403": {
+            "description": "Not a task approver"
+          }
+        }
+      }
+    },
+    "/api/tasks/pending-approval/stats": {
+      "get": {
+        "tags": [
+          "Tasks"
+        ],
+        "summary": "Review inbox statistics",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "page",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100
+            }
+          },
+          {
+            "name": "teamId",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "overdueSla",
+            "in": "query",
+            "schema": {
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Scoped pending approvals or pending/overdueSla/byTeam statistics"
+          },
+          "403": {
+            "description": "Not a task approver"
+          }
+        }
+      }
+    }
+  }
+}

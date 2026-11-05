@@ -29,6 +29,7 @@ const asyncHandler = handler => catchAsync(async (req, res, next) => {
     throw error;
   } finally { res.json = json; }
   if (res.statusCode < 400 && res.locals?.auditTaskEvent) audit.record(req, res.locals.auditTaskEvent);
+  if (res.statusCode < 400 && res.locals?.taskReviewNotification) await require('../services/task-review-notification.service').notify(res.locals.taskReviewNotification);
   return res.json(body);
 });
 const { protect, authorize } = require('../middleware/auth.middleware');
@@ -55,6 +56,8 @@ const {
   deleteSubtask,
   getSubtasks
 } = require('../controllers/task.controller');
+const review = require('../controllers/task-review.controller');
+const { reviewValidation, pendingApprovalValidation } = require('../validators/task.validators');
 const getMyTasks = require('../controllers/my-tasks.controller');
 const advanced = require('../controllers/task-advanced.controller');
 const { advancedTaskValidation: rules, taskViewValidation } = require('../validators');
@@ -109,13 +112,19 @@ router.get('/:id/time-entries', rules(), validateRequest, asyncHandler(advanced.
 router.delete('/:id/time-entries/:entryId', rules(null, ['entryId']), validateRequest, asyncHandler(advanced.deleteTimeEntry));
 router.delete('/:id/attachments/:attachmentId', rules(), validateRequest, asyncHandler(advanced.deleteAttachment));
 router.get('/:id/history', rules(), validateRequest, asyncHandler(advanced.getTaskHistory));
+router.get('/pending-approval', pendingApprovalValidation, validateRequest, asyncHandler(review.findPendingApproval));
+router.get('/pending-approval/stats', pendingApprovalValidation, validateRequest, asyncHandler(review.pendingApprovalStats));
+router.post('/:id/submit', reviewValidation(), validateRequest, asyncHandler(review.submitForReview));
+router.post('/:id/approve', reviewValidation(), validateRequest, asyncHandler(review.approveReview));
+router.post('/:id/request-changes', reviewValidation(true), validateRequest, asyncHandler(review.requestChanges));
+router.post('/:id/withdraw', reviewValidation(), validateRequest, asyncHandler(review.withdrawSubmission));
 router.get('/:id', asyncHandler(getTaskById));
 router.put('/:id', authorize(USER_ROLES.TEAM_LEAD, USER_ROLES.HR_MANAGER), updateTaskValidation, validateRequest, asyncHandler(updateTask));
 router.delete('/:id', authorize(USER_ROLES.TEAM_LEAD, USER_ROLES.HR_MANAGER), asyncHandler(deleteTask));
 
 // Task operations
 router.post('/:id/assign', authorize(USER_ROLES.TEAM_LEAD, USER_ROLES.HR_MANAGER), assignTaskValidation, validateRequest, asyncHandler(assignTask));
-router.put('/:id/status', updateStatusValidation, validateRequest, asyncHandler(updateTaskStatus));
+router.put('/:id/status', updateStatusValidation, reviewValidation(), validateRequest, asyncHandler(updateTaskStatus));
 router.put('/:id/progress', updateProgressValidation, validateRequest, asyncHandler(updateTaskProgress));
 
 // Comments

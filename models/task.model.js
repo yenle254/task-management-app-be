@@ -21,8 +21,8 @@ const SubTaskSchema = new mongoose.Schema({
 }, { _id: true });
 
 const StatusHistorySchema = new mongoose.Schema({
-    from: { type: String, enum: ['todo', 'in_progress', 'done', 'deleted'], default: null },
-    to: { type: String, enum: ['todo', 'in_progress', 'done', 'deleted'], required: true },
+    from: { type: String, enum: ['todo', 'in_progress', 'in_review', 'done', 'deleted'], default: null },
+    to: { type: String, enum: ['todo', 'in_progress', 'in_review', 'done', 'deleted'], required: true },
     at: { type: Date, default: Date.now },
     // The user who performed the transition, when known.
     by: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
@@ -51,7 +51,25 @@ const TimeEntrySchema = new mongoose.Schema({
     loggedAt: { type: Date, default: Date.now }
 });
 
+const ReviewEventSchema = new mongoose.Schema({
+    round: { type: Number, required: true },
+    type: { type: String, enum: ['submitted', 'approved', 'changes_requested', 'withdrawn', 'reassigned', 'cancelled'], required: true },
+    by: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
+    at: { type: Date, default: Date.now },
+    note: { type: String, maxlength: 500, default: '' },
+    reason: { type: String, maxlength: 1000, default: '' }
+}, { _id: false });
 const TaskSchema = new mongoose.Schema({
+    review: {
+        submittedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
+        submittedAt: { type: Date, default: null },
+        note: { type: String, maxlength: 500, default: '' },
+        currentRound: { type: Number, default: 0 },
+        remindedAt: { type: Date, default: null },
+        approverSnapshot: [{ userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+            role: { type: String, enum: ['team_lead', 'hr_manager'] }, resolvedAt: Date, active: Boolean }],
+        rounds: { type: [ReviewEventSchema], default: [] }
+    },
     parentTaskId: { type: mongoose.Schema.Types.ObjectId, ref: 'Task', default: null },
     checklists: { type: [ChecklistSchema], default: [] },
     dependencies: { type: [{ type: mongoose.Schema.Types.ObjectId, ref: 'Task' }], default: [], validate: v => v.length <= 20 },
@@ -62,7 +80,7 @@ const TaskSchema = new mongoose.Schema({
     actualMinutes: { type: Number, default: 0, min: 0 },
     title: { type: String, required: true, trim: true },
     description: { type: String, default: '' },
-    status: { type: String, enum: ['todo', 'in_progress', 'done', 'deleted'], default: 'todo', index: true },
+    status: { type: String, enum: ['todo', 'in_progress', 'in_review', 'done', 'deleted'], default: 'todo', index: true },
     priority: { type: String, enum: ['low', 'medium', 'high'], default: 'medium' },
     difficulty: { type: String, enum: ['easy', 'medium', 'hard'], default: 'medium' },
     assignedTo: [{ type: mongoose.Schema.Types.ObjectId, ref: 'User', index: true }],
@@ -97,6 +115,8 @@ TaskSchema.index({ 'statusHistory.at': 1 });
 TaskSchema.index({ parentTaskId: 1 });
 TaskSchema.index({ dependencies: 1 });
 TaskSchema.index({ watchers: 1 });
+TaskSchema.index({ 'review.approverSnapshot.userId': 1, status: 1 });
+TaskSchema.index({ status: 1, 'review.remindedAt': 1, 'review.submittedAt': 1 });
 TaskSchema.index({ dueDate: 1, startDate: 1 });
 
 
@@ -118,6 +138,10 @@ TaskSchema.pre('save', async function(next) {
         await require('../services/task-write-lock.service').journalTaskSave(this);
         const advanced = require('../services/task-advanced.service');
         const requestedStatus = this.status;
+        const persistedStatus = this.$locals.previousStatus ?? this.$locals.loadedStatus ?? this.statusHistory.at(-1)?.to;
+        if (this.status === 'done' && persistedStatus !== 'done' && !this.$locals.reviewApproved) {
+            throw advanced.fail('Task must be submitted for review before it can be completed');
+        }
         if (this.status === 'deleted' || this.$locals.previousStatus === 'deleted') {
             this.status = 'deleted';
         } else if (this.subTasks && this.subTasks.length > 0) {
@@ -126,7 +150,7 @@ TaskSchema.pre('save', async function(next) {
             advanced.recalculateProgress(this);
 
             if (completedCount === totalSubtasks) {
-                this.status = 'done';
+                if (!['done', 'in_review'].includes(this.status)) this.status = 'in_progress';
             } else if (completedCount > 0) {
                 if (this.status === 'done') {
                     this.status = 'in_progress';
@@ -209,6 +233,7 @@ TaskSchema.pre('save', async function(next) {
             this.$locals.previousStatus = this.status;
         }
 
+        this.$locals.reviewApproved = false;
         next();
     } catch (error) { next(error); }
 });
