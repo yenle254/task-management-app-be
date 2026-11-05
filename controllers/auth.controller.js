@@ -1,3 +1,9 @@
+const audit = require('../services/audit.service');
+const authAudit = (req, action, user, extra = {}) => {
+  // A failed login/recovery attempt does not authenticate the target account.
+  const actor = ['auth.register', 'auth.login_success'].includes(action) ? user : req.user;
+  audit.record({ ...req, ip: req.ip, user: actor }, { action, target: audit.target('user', user), ...extra });
+};
 const User = require("../models/user.model");
 const Team = require("../models/team.model");
 const { hashPassword, comparePassword } = require("../services/auth.service");
@@ -63,6 +69,7 @@ const register = async (req, res) => {
       leaveBalance: new Map([["2025", { total: 12, used: 0, remaining: 12 }]]),
     });
 
+    authAudit(req, 'auth.register', user);
     sendTokenResponse(user, 201, res);
   } catch (error) {
     console.error("Register error:", error);
@@ -85,6 +92,7 @@ const login = async (req, res) => {
     const user = await User.findOne({ email }).select("+password");
 
     if (!user) {
+      authAudit(req, 'auth.login_failed', null, { outcome: 'failure', reason: 'invalid_email_or_password', metadata: { email: audit.maskEmail(email) } });
       return res.status(401).json({
         success: false,
         error: "Invalid credentials",
@@ -94,6 +102,7 @@ const login = async (req, res) => {
     const isMatch = await comparePassword(password, user.password);
 
     if (!isMatch) {
+      authAudit(req, 'auth.login_failed', user, { outcome: 'failure', reason: 'invalid_email_or_password' });
       return res.status(401).json({
         success: false,
         error: "Invalid credentials",
@@ -101,13 +110,17 @@ const login = async (req, res) => {
     }
 
     if (!user.isActive) {
+      authAudit(req, 'auth.login_failed', user, { outcome: 'failure', reason: 'deactivated' });
       return res.status(401).json({
         success: false,
         error: "Account is deactivated",
       });
     }
 
+    const auditActor = { _id: String(user._id), role: user.role, email: user.email, profile: { fullName: user.profile?.fullName } };
+    const auditRequest = { ...req, ip: req.ip };
     sendTokenResponse(user, 200, res);
+    authAudit(auditRequest, 'auth.login_success', auditActor);
   } catch (error) {
     res.status(500).json({
       success: false,
@@ -157,6 +170,7 @@ const forgotPassword = async (req, res) => {
       attempts: 0,
     };
     await user.save();
+    authAudit(req, 'auth.password_reset_requested', user, { metadata: { email: user.email } });
 
     try {
       await sendResetPasswordEmail(user.email, otp, user.profile.fullName);
@@ -214,6 +228,7 @@ const verifyOTP = async (req, res) => {
     }
 
     if (user.resetPassword.attempts >= 5) {
+      authAudit(req, 'auth.otp_verify_failed', user, { outcome: 'failure', reason: 'attempts_exhausted' });
       user.resetPassword = {};
       await user.save();
 
@@ -224,6 +239,7 @@ const verifyOTP = async (req, res) => {
     }
 
     if (isOTPExpired(user.resetPassword.otpExpires)) {
+      authAudit(req, 'auth.otp_verify_failed', user, { outcome: 'failure', reason: 'expired' });
       user.resetPassword = {};
       await user.save();
 
@@ -234,6 +250,7 @@ const verifyOTP = async (req, res) => {
     }
 
     if (user.resetPassword.otp !== otp) {
+      authAudit(req, 'auth.otp_verify_failed', user, { outcome: 'failure', reason: 'invalid_otp' });
       user.resetPassword.attempts += 1;
       await user.save();
 
@@ -328,6 +345,7 @@ const resetPassword = async (req, res) => {
     user.password = await hashPassword(newPassword);
     user.resetPassword = {}; // Xóa tất cả dữ liệu reset
     await user.save();
+    authAudit(req, 'auth.password_reset_completed', user);
 
     res.status(200).json({
       success: true,
@@ -378,6 +396,7 @@ const resendOTP = async (req, res) => {
       attempts: 0,
     };
     await user.save();
+    authAudit(req, 'auth.password_reset_requested', user, { metadata: { email: user.email } });
 
     // Gửi email
     try {
@@ -419,6 +438,7 @@ const changePassword = async (req, res) => {
 
     user.password = await hashPassword(newPassword);
     await user.save();
+    authAudit(req, 'auth.password_changed', user);
 
     res.status(200).json({
       success: true,

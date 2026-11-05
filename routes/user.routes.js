@@ -1,3 +1,4 @@
+const { auditReasonValidation } = require('../validators/audit.validators');
 const express = require("express");
 const router = express.Router();
 const asyncHandler = require("../middleware/async-handler.middleware");
@@ -21,8 +22,8 @@ const {
 router.get("/", protect, authorize(USER_ROLES.HR_MANAGER), getUsersValidation, validateRequest, asyncHandler(getAllUsers));
 router.get("/messaging/contacts", protect, asyncHandler(getAllUsers));
 router.get("/:id", protect, getUserByIdValidation, validateRequest, asyncHandler(getUserById));
-router.put("/:id", protect, authorize(USER_ROLES.HR_MANAGER), updateUserValidation, validateRequest, asyncHandler(updateUser));
-router.delete("/:id", protect, authorize(USER_ROLES.HR_MANAGER), getUserByIdValidation, validateRequest, asyncHandler(deleteUser));
+router.put("/:id", protect, authorize(USER_ROLES.HR_MANAGER), updateUserValidation, auditReasonValidation, validateRequest, asyncHandler(updateUser));
+router.delete("/:id", protect, authorize(USER_ROLES.HR_MANAGER), getUserByIdValidation, auditReasonValidation, validateRequest, asyncHandler(deleteUser));
 router.get("/team/:teamId", protect, getUsersByTeamValidation, validateRequest, asyncHandler(getUsersByTeam));
 
 module.exports = router;

@@ -1,3 +1,4 @@
+const audit = require('../services/audit.service');
 const adminService = require('../services/admin.service');
 
 /**
@@ -18,6 +19,7 @@ const createHRAccount = async (req, res) => {
 
     const user = await adminService.createHRAccount({ email, password, profile });
 
+    audit.record(req, { action: 'admin.hr_account_created', target: audit.target('user', user) });
     res.status(201).json({
       success: true,
       message: 'HR Manager account created successfully',

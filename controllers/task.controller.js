@@ -1,4 +1,15 @@
 const Task = require('../models/task.model');
+const audit = require('../services/audit.service');
+const { getTaskBeforeImage } = require('../services/task-write-lock.service');
+const stageTaskAudit = (res, action, task) => {
+  const before = audit.snapshot('task', getTaskBeforeImage(task._id));
+  const after = audit.snapshot('task', task);
+  const fields = action === 'task.deleted' ? audit.FIELDS.task : audit.FIELDS.task.filter(field => field !== 'status');
+  const changes = audit.diff(before, after, fields);
+  if (action === 'task.updated' && !changes.length) return;
+  res.locals ||= {};
+  res.locals.auditTaskEvent = { action, target: audit.target('task', task), changes };
+};
 const mongoose = require('mongoose');
 const advanced = require('../services/task-advanced.service');
 const Team = require('../models/team.model');
@@ -118,6 +129,7 @@ const createTask = async (req, res) => {
       { path: 'teamId', select: 'name' }
     ]);
 
+    stageTaskAudit(res, 'task.created', task);
     res.status(201).json({
       success: true,
       data: task
@@ -269,6 +281,7 @@ const updateTask = async (req, res) => {
 
     await task.populate('assignedBy assignedTo teamId comments.userId');
 
+    stageTaskAudit(res, 'task.updated', task);
     res.json({
       success: true,
       data: enrichTask(task, false)
@@ -301,6 +314,7 @@ const deleteTask = async (req, res) => {
     task.status = TASK_STATUS.DELETED;
     await task.save();
 
+    stageTaskAudit(res, 'task.deleted', task);
     res.json({ success: true, message: 'Task deleted successfully' });
   } catch (error) {
     console.error('Delete task error:', error);
@@ -378,6 +392,7 @@ const assignTask = async (req, res) => {
 
     await task.populate('assignedBy assignedTo teamId');
 
+    stageTaskAudit(res, 'task.assigned', task);
     res.json({
       success: true,
       message: 'Task assigned successfully',

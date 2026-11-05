@@ -1,3 +1,5 @@
+const audit = require('../services/audit.service');
+const rejectAuthentication = req => audit.record({ ...req, ip: req.ip, user: null }, { action: 'security.auth_rejected', outcome: 'denied' });
 const { verifyToken } = require('../config/jwt');
 const User = require('../models/user.model');
 
@@ -9,6 +11,7 @@ const protect = async (req, res, next) => {
     }
 
     if (!token) {
+        rejectAuthentication(req);
         return res.status(401).json({
             success: false,
             error: 'Not authorized to access this route. No token provided.'
@@ -21,6 +24,7 @@ const protect = async (req, res, next) => {
         req.user = await User.findById(decoded.id).select('-password');
 
         if (!req.user) {
+            rejectAuthentication(req);
             return res.status(401).json({
                 success: false,
                 error: 'User not found'
@@ -28,6 +32,7 @@ const protect = async (req, res, next) => {
         }
 
         if (!req.user.isActive) {
+            rejectAuthentication(req);
             return res.status(401).json({
                 success: false,
                 error: 'User account is deactivated'
@@ -36,6 +41,7 @@ const protect = async (req, res, next) => {
 
         next();
     } catch (error) {
+        rejectAuthentication(req);
         return res.status(401).json({
             success: false,
             error: error.message || 'Not authorized to access this route'
@@ -46,6 +52,7 @@ const protect = async (req, res, next) => {
 const authorize = (...roles) => {
     return (req, res, next) => {
         if (!req.user) {
+            rejectAuthentication(req);
             return res.status(401).json({
                 success: false,
                 error: 'Not authenticated'
@@ -53,6 +60,7 @@ const authorize = (...roles) => {
         }
 
         if (!roles.includes(req.user.role)) {
+            audit.record(req, { action: 'security.access_denied', outcome: 'denied', metadata: { route: audit.context(req).route, method: req.method, requiredRoles: roles } });
             return res.status(403).json({
                 success: false,
                 error: `User role '${req.user.role}' is not authorized to access this route`

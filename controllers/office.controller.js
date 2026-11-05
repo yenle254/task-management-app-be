@@ -1,3 +1,4 @@
+const audit = require('../services/audit.service');
 /**
  * Office Controller
  * Quản lý office locations cho phép check-in
@@ -82,6 +83,7 @@ const createOffice = async (req, res) => {
       isActive: isActive !== false
     });
 
+    audit.changed(req, 'office.created', 'office', null, office);
     res.status(201).json({
       success: true,
       message: 'Office created successfully',
@@ -120,6 +122,8 @@ const updateOffice = async (req, res) => {
       );
     }
 
+    const before = audit.snapshot('office', office);
+
     // Update fields
     if (name !== undefined) office.name = name;
     if (address !== undefined) office.address = address;
@@ -130,6 +134,7 @@ const updateOffice = async (req, res) => {
 
     await office.save();
 
+    audit.changed(req, 'office.updated', 'office', before, office);
     res.json({
       success: true,
       message: 'Office updated successfully',
@@ -159,6 +164,7 @@ const deleteOffice = async (req, res) => {
       });
     }
 
+    audit.changed(req, 'office.deleted', 'office', office, null, { metadata: audit.snapshot('office', office) });
     res.json({
       success: true,
       message: 'Office deleted successfully'
@@ -187,6 +193,8 @@ const setActiveOffice = async (req, res) => {
       });
     }
 
+    const before = audit.snapshot('office', office);
+
     // Deactivate all offices
     await Office.updateMany({}, { isActive: false });
 
@@ -194,6 +202,7 @@ const setActiveOffice = async (req, res) => {
     office.isActive = true;
     await office.save();
 
+    audit.changed(req, 'office.activated', 'office', before, office);
     res.json({
       success: true,
       message: 'Active office updated successfully',

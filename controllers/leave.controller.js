@@ -24,11 +24,11 @@ async function teamScope(user) {
     return { userId: { $in: members.map(member => member._id) } };
 }
 const submitLeave = async (req, res) => {
-    try { res.status(201).json({ success: true, data: await present(await workflow.create(req.user, req.body)) }); }
+    try { res.status(201).json({ success: true, data: await present(await workflow.create(req.user, req.body, req)) }); }
     catch (error) { respondError(res, error); }
 };
 const actionHandler = action => async (req, res) => {
-    try { res.json({ success: true, data: await present(await workflow.transition(req.user, req.params.id, action, req.body || {})) }); }
+    try { res.json({ success: true, data: await present(await workflow.transition(req.user, req.params.id, action, req.body || {}, req)) }); }
     catch (error) { respondError(res, error); }
 };
 const submitDraft = actionHandler('submit'), editLeave = actionHandler('edit_resubmit');

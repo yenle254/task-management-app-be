@@ -1,3 +1,4 @@
+const audit = require('../services/audit.service');
 const Attendance = require('../models/attendance.model');
 const attendanceService = require('../services/attendance.service');
 const User = require('../models/user.model');
@@ -242,8 +243,14 @@ const getMyAttendance = async (req, res) => {
  */
 const getAttendanceByDate = async (req, res) => {
     try {
-        const { date } = req.params;
+        const date = req.params.date || req.query.date;
+        if (!date) {
+            return res.status(400).json({ success: false, error: 'Date is required' });
+        }
         const targetDate = new Date(date);
+        if (Number.isNaN(targetDate.getTime())) {
+            return res.status(400).json({ success: false, error: 'Invalid date' });
+        }
         const startOfDay = new Date(targetDate);
         startOfDay.setHours(0, 0, 0, 0);
         const endOfDay = new Date(targetDate);
@@ -401,10 +408,15 @@ const updateAttendance = async (req, res) => {
             });
         }
 
+        const before = audit.snapshot('attendance', attendanceRecord);
         Object.keys(updates).forEach(key => {
             attendanceRecord[key] = updates[key];
         });
         await attendanceRecord.save();
+        const reason = audit.text(req.body?.reason);
+        audit.changed(req, 'attendance.manual_updated', 'attendance', before, attendanceRecord, {
+            reason, metadata: { reasonMissing: !reason }
+        });
 
         res.status(200).json({
             success: true,

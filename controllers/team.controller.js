@@ -1,3 +1,9 @@
+const audit = require('../services/audit.service');
+const Team = require('../models/team.model');
+const Task = require('../models/task.model');
+const readAuditTeam = id => Team.findById(id).select('name description leaderId memberIds')
+  .populate('leaderId', 'profile.fullName').populate('memberIds', 'profile.fullName').lean();
+const personSnapshot = person => ({ id: String(person?._id || person), name: person?.profile?.fullName || null });
 const teamService = require("../services/team.service");
 
 /**
@@ -23,6 +29,7 @@ const createTeam = async (req, res) => {
       leaderId,
     });
 
+    audit.changed(req, 'team.created', 'team', null, team);
     res.status(201).json({
       success: true,
       message: "Team created successfully",
@@ -102,11 +109,14 @@ const updateTeam = async (req, res) => {
     const { id } = req.params;
     const { name, description, leaderId } = req.body;
 
+    const before = await readAuditTeam(id);
     const team = await teamService.updateTeam(id, {
       name,
       description,
       leaderId,
     });
+    audit.changed(req, 'team.updated', 'team', before, team);
+    if (leaderId && String(before?.leaderId?._id || before?.leaderId) !== String(team.leaderId?._id || team.leaderId)) audit.changed(req, 'team.lead_assigned', 'team', before, team);
     res.status(200).json({
       success: true,
       message: "Team updated successfully",
@@ -130,7 +140,12 @@ const deleteTeam = async (req, res) => {
   try {
     const { id } = req.params;
 
+    const before = await readAuditTeam(id);
+    const activeTaskCount = await Task.countDocuments({ teamId: id, status: { $ne: 'completed' } });
+    const metadata = before ? { name: before.name, leader: personSnapshot(before.leaderId),
+      members: before.memberIds.map(personSnapshot), activeTaskCount } : {};
     await teamService.deleteTeam(id);
+    audit.changed(req, 'team.deleted', 'team', before, null, { metadata });
 
     res.status(200).json({
       success: true,
@@ -161,8 +176,10 @@ const addMember = async (req, res) => {
       });
     }
 
+    const before = await readAuditTeam(id);
     const team = await teamService.addMember(id, userId);
 
+    audit.changed(req, 'team.member_added', 'team', before, team);
     res.status(200).json({
       success: true,
       message: "Member added successfully",
@@ -185,8 +202,10 @@ const removeMember = async (req, res) => {
   try {
     const { id, userId } = req.params;
 
+    const before = await readAuditTeam(id);
     const team = await teamService.removeMember(id, userId);
 
+    audit.changed(req, 'team.member_removed', 'team', before, team);
     res.status(200).json({
       success: true,
       message: "Member removed successfully",
@@ -217,8 +236,10 @@ const assignTeamLead = async (req, res) => {
       });
     }
 
+    const before = await readAuditTeam(id);
     const team = await teamService.assignTeamLead(id, leaderId);
 
+    audit.changed(req, 'team.lead_assigned', 'team', before, team);
     res.status(200).json({
       success: true,
       message: "Team leader assigned successfully",

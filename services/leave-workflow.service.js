@@ -1,3 +1,5 @@
+const audit = require('./audit.service');
+
 const { randomUUID } = require('node:crypto');
 const Leave = require('../models/leave.model');
 const User = require('../models/user.model');
@@ -53,7 +55,7 @@ async function notify(leave) {
     } catch (error) { console.error('Leave notification failed:', error.message); }
 }
 
-async function create(actor, input) {
+async function create(actor, input, request = { user: actor }) {
     const key = input.idempotencyKey;
     if (key) {
         const existing = await Leave.findOne({ userId: actor._id, idempotencyKey: key });
@@ -70,7 +72,10 @@ async function create(actor, input) {
         if (error.code === 11000 && key) return Leave.findOne({ userId: actor._id, idempotencyKey: key });
         throw error;
     }
-    if (!input.draft) await notify(leave);
+    if (!input.draft) {
+        audit.changed(request, 'leave.submitted', 'leave', null, leave);
+        await notify(leave);
+    }
     return leave;
 }
 
@@ -134,7 +139,7 @@ async function refund(leave, token, legacy = false) {
     if (!updated && (await receiptFor(leave, token))?.state !== 'refunded') fail(409, 'Balance refund requires operator reconciliation');
 }
 
-async function transition(actor, leaveId, action, input = {}) {
+async function transition(actor, leaveId, action, input = {}, request = { user: actor }) {
     const leave = await readForAction(leaveId);
     const owner = id(leave.userId) === id(actor);
     if (input.revision !== undefined && input.revision !== leave.revision) fail(409, 'Leave changed; refresh before deciding');
@@ -165,11 +170,20 @@ async function transition(actor, leaveId, action, input = {}) {
 
     const token = randomUUID();
     const claimed = await Leave.findOneAndUpdate({ _id: leave._id, status: leave.status, revision: leave.revision,
-        currentStep: leave.currentStep, operation: null }, { $set: { operation: { token, action, at: new Date(), by: actor._id } } }, { new: true });
+        currentStep: leave.currentStep, operation: null }, { $set: { operation: { token, action, at: new Date() } } }, { new: true });
     if (!claimed) fail(409, 'Leave already changed; refresh before deciding');
     const finalApproval = updates.status === 'approved';
     const approvedCancel = action === 'cancel' && leave.status === 'approved';
     const balanceToken = leave.balanceOperationId || `legacy_${leave._id}`;
+    const recordCommit = result => {
+        const eventAction = { submit: 'submitted', edit_resubmit: 'submitted', approve: 'approved', reject: 'rejected', cancel: 'cancelled' }[action];
+        audit.changed(request, `leave.${eventAction}`, 'leave', leave, result, { reason,
+            metadata: { step: leave.currentStep, finalApproval } });
+        if (finalApproval || approvedCancel) audit.record(request, {
+            action: finalApproval ? 'leave.balance_deducted' : 'leave.balance_refunded',
+            target: audit.target('leave', result), metadata: { days: leave.numberOfDays, year: new Date(leave.startDate).getFullYear() }
+        });
+    };
     try {
         const history = [event({ ...leave, ...('startDate' in updates ? { startDate: updates.startDate, endDate: updates.endDate, numberOfDays: updates.numberOfDays } : {}) }, actor, action, updates.status, reason)];
         if (finalApproval) {
@@ -183,17 +197,22 @@ async function transition(actor, leaveId, action, input = {}) {
         const result = await Leave.findOneAndUpdate({ _id: leave._id, 'operation.token': token, revision: leave.revision },
             { $set: { ...updates, operation: null }, $inc: { revision: 1 }, $push: { history: { $each: history } } }, { new: true, runValidators: true });
         if (!result) fail(409, 'Leave claim changed; operator reconciliation required');
+        recordCommit(result);
         if (action !== 'cancel') await notify(result);
         return result;
     } catch (error) {
         // Read-back distinguishes a failed write from a committed write with a lost response.
         // If read-back itself fails, leave the durable claim for operator recovery.
         const current = await Leave.findById(leave._id).lean();
-        if (current && !current.operation && current.revision === leave.revision + 1 && current.status === updates.status) return current;
+        if (current && !current.operation && current.revision === leave.revision + 1 && current.status === updates.status) { recordCommit(current); return current; }
         if (current?.operation?.token !== token) throw error;
         if (finalApproval) {
             const receipt = await receiptFor(leave, token);
-            if (receipt?.state === 'deducted') await refund(leave, token);
+            if (receipt?.state === 'deducted') {
+                await refund(leave, token);
+                audit.record(request, { action: 'leave.balance_refunded', target: audit.target('leave', leave),
+                    reason: 'Approval failed; conditional compensation', metadata: { compensation: true, days: leave.numberOfDays } });
+            }
             if (receipt) {
                 await Leave.updateOne({ _id: leave._id, 'operation.token': token }, { $set: { operation: null },
                     $push: { history: event(leave, actor, 'balance_refunded', leave.status, 'Approval failed; conditional compensation', leave.revision) } });

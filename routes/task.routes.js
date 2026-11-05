@@ -3,6 +3,7 @@ const express = require('express');
 const router = express.Router();
 const catchAsync = require('../middleware/async-handler.middleware');
 const { withTaskWriteLock } = require('../services/task-write-lock.service');
+const audit = require('../services/audit.service');
 // Acquire before the controller loads a document. Holding only around save()
 // would still allow stale validation and lost embedded-array/total updates.
 const asyncHandler = handler => catchAsync(async (req, res, next) => {
@@ -27,6 +28,7 @@ const asyncHandler = handler => catchAsync(async (req, res, next) => {
     }
     throw error;
   } finally { res.json = json; }
+  if (res.statusCode < 400 && res.locals?.auditTaskEvent) audit.record(req, res.locals.auditTaskEvent);
   return res.json(body);
 });
 const { protect, authorize } = require('../middleware/auth.middleware');
