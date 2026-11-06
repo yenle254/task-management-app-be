@@ -85,6 +85,7 @@ const statisticsRoutes = require("./routes/statistics.routes");
 const officeRoutes = require("./routes/office.routes");
 const adminRoutes = require("./routes/admin.routes");
 const employeeRoutes = require("./routes/employee.routes");
+const aiRoutes = require("./chat_bot/routes/ai.routes");
 
 // Mount routes with general rate limiting (skip for /api/auth which uses strict limiter)
 app.use("/api/auth", authRoutes);
@@ -100,6 +101,7 @@ app.use("/api/offices", generalLimiter, officeRoutes);
 app.use("/api/statistics", generalLimiter, statisticsRoutes);
 app.use("/api/employees", generalLimiter, employeeRoutes);
 app.use("/api/admin", adminRoutes);
+app.use("/api/ai", generalLimiter, aiRoutes);
 const { setupSwagger } = require("./config/swagger.config");
 app.use("/uploads", express.static(path.join(__dirname, "uploads")));
 setupSwagger(app);
