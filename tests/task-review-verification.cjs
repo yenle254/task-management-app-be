@@ -32,6 +32,8 @@ async function main() {
     app.get('/api/auth/me', require('../middleware/auth.middleware').protect, (req, res) => res.json({ success: true, data: req.user }));
     app.use('/api/tasks', require('../routes/task.routes'));
     app.use('/api/notifications', require('../routes/notification.routes'));
+    app.use('/api/teams', require('../routes/team.routes'));
+    app.use('/api/users', require('../routes/user.routes'));
     app.use((error, req, res, next) => res.status(error.statusCode || 500).json({ success: false, error: error.message }));
     server = require('node:http').createServer(app); await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
     const request = async (actor, method, route, body, expected = 200) => {
@@ -70,7 +72,11 @@ async function main() {
     await check('mutation guards, comment allowed, HR reassignment reset and resubmission', async () => {
       const t = await create(); await request(0, 'POST', `/tasks/${t._id}/submit`, {});
       for (const [method, suffix, body] of [['PUT', '', { title: 'Changed' }], ['PUT', '/progress', { progress: 0 }], ['POST', '/subtasks', { title: 'Changed' }], ['POST', '/checklists', { title: 'Changed' }], ['POST', '/tags', { tags: ['new'] }]]) await request(2, method, `/tasks/${t._id}${suffix}`, body, 409);
-      await request(0, 'POST', `/tasks/${t._id}/comments`, { text: 'Please review' }, 200);
+      const comment = await request(1, 'POST', `/tasks/${t._id}/comments`, { text: 'Please review' }, 200);
+      assert.equal(comment.data.reviewPermissions.canDecide, true);
+      assert.equal(comment.data.review.rounds[0].by.profile.fullName, users[0].profile.fullName);
+      await request(2, 'PUT', `/tasks/${t._id}`, { teamId: String(team._id), assignedTo: [String(users[0]._id)] });
+      assert.equal((await Task.findById(t._id)).status, 'in_review');
       await request(1, 'POST', `/tasks/${t._id}/assign`, { assignedTo: [String(users[5]._id)] }, 403);
       await request(2, 'POST', `/tasks/${t._id}/assign`, { assignedTo: [String(users[5]._id)] });
       const saved = await Task.findById(t._id); assert.equal(saved.status, 'in_progress'); assert.equal(saved.review.rounds.at(-1).type, 'reassigned');
@@ -85,6 +91,38 @@ async function main() {
       const parent = await create(); const child = await create({ parentTaskId: parent._id });
       await request(0, 'POST', `/tasks/${child._id}/submit`, {}); await request(1, 'POST', `/tasks/${child._id}/approve`, {});
       assert.equal((await Task.findById(parent._id)).status, 'in_progress');
+    });
+    await check('reviewed parent scope locked; dependencies and children gate approval only', async () => {
+      const parent = await create(), child = await create({ parentTaskId: parent._id });
+      await request(0, 'POST', `/tasks/${parent._id}/submit`, {});
+      await request(1, 'POST', `/tasks/${parent._id}/approve`, {}, 400);
+      await request(2, 'DELETE', `/tasks/${child._id}`, undefined, 409);
+      await request(0, 'POST', `/tasks/${child._id}/submit`, {});
+      await request(1, 'PUT', `/tasks/${child._id}/status`, { status: 'done', note: 'Approved through alias' });
+      await request(1, 'POST', `/tasks/${parent._id}/approve`, {});
+      const dependency = await create(), blocked = await create({ dependencies: [dependency._id] });
+      await request(0, 'POST', `/tasks/${blocked._id}/submit`, {});
+      await request(1, 'POST', `/tasks/${blocked._id}/approve`, {}, 400);
+    });
+    await check('HR team change preserves history and resolves the next approver snapshot', async () => {
+      const otherTeam = await Team.create({ name: 'Second Review Team', leaderId: users[3]._id, memberIds: [users[5]._id] });
+      await User.updateOne({ _id: users[5]._id }, { $set: { teamId: otherTeam._id } });
+      const t = await create(); await request(0, 'POST', `/tasks/${t._id}/submit`, {});
+      await request(2, 'PUT', `/tasks/${t._id}`, { teamId: String(otherTeam._id), assignedTo: [String(users[5]._id)] });
+      const saved = await Task.findById(t._id);
+      assert.equal(saved.status, 'in_progress'); assert.equal(saved.review.rounds.at(-1).type, 'reassigned');
+      assert.ok(saved.review.approverSnapshot.some(entry => String(entry.userId) === String(users[3]._id)));
+      await request(5, 'POST', `/tasks/${t._id}/submit`, {});
+      await request(3, 'POST', `/tasks/${t._id}/approve`, {});
+      await User.updateOne({ _id: users[5]._id }, { $set: { teamId: team._id } });
+    });
+    await check('legacy completed tasks remain completed with no invented review rounds', async () => {
+      const legacy = await create();
+      await Task.collection.updateOne({ _id: legacy._id }, { $set: { status: 'done', completedAt: new Date() }, $unset: { review: '' } });
+      const read = await request(0, 'GET', `/tasks/${legacy._id}`);
+      assert.equal(read.data.status, 'done'); assert.deepEqual(read.data.review.rounds, []);
+      await request(0, 'POST', `/tasks/${legacy._id}/comments`, { text: 'Historical record' });
+      assert.equal((await Task.findById(legacy._id)).status, 'done');
     });
     await check('SLA reminders once per round across days, no reminder after approval', async () => {
       const t = await create(); await request(0, 'POST', `/tasks/${t._id}/submit`, {});
@@ -106,6 +144,7 @@ async function main() {
       const list = await request(1, 'GET', '/tasks/pending-approval');
       assert.ok(list.data.some(item => item._id === String(t._id))); assert.ok(!list.data.some(item => item._id === String(own._id)));
       const stats = (await request(1, 'GET', '/tasks/pending-approval/stats')).data; assert.equal(stats.pending, list.total);
+      assert.equal(stats.byTeam.find(row => row.teamId === String(team._id)).teamName, team.name);
       await Team.updateOne({ _id: team._id }, { $set: { leaderId: users[3]._id } });
       assert.equal((await request(1, 'GET', `/tasks/${t._id}`)).data.reviewPermissions.canDecide, true);
       assert.equal((await request(3, 'GET', `/tasks/${t._id}`)).data.reviewPermissions.canDecide, true);
@@ -136,7 +175,9 @@ async function main() {
     if (process.argv.includes('--browser')) {
       const browserTask = await create({ title: 'Browser review task', dueDate: new Date(Date.now() + 86400000) });
       await request(0, 'POST', `/tasks/${browserTask._id}/submit`, { note: 'Please verify' });
-      await require('./task-review-browser.cjs')({ apiPort: server.address().port, directory, user: users[1].toObject(), token: tokens[1], taskId: String(browserTask._id), check });
+      const employeeTask = await create({ title: 'Employee browser task' });
+      await require('./task-review-browser.cjs')({ apiPort: server.address().port, directory, user: users[1].toObject(), token: tokens[1], taskId: String(browserTask._id),
+        employee: { user: users[0].toObject(), token: tokens[0] }, hr: { user: users[2].toObject(), token: tokens[2] }, employeeTaskId: String(employeeTask._id), check });
     }
   } finally {
     fs.writeFileSync(path.join(directory, 'results.json'), JSON.stringify(results, null, 2));

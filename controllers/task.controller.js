@@ -271,9 +271,11 @@ const updateTask = async (req, res) => {
       if (await User.countDocuments({ _id: { $in: ids }, teamId: nextTeam, isActive: true }) !== ids.length) throw advanced.fail('All assignees must be active members of the task team');
       if (advanced.idOf(nextTeam) !== advanced.idOf(task.teamId) && (task.parentTaskId || task.dependencies?.length || await Task.exists({ $or: [{ parentTaskId: task._id }, { dependencies: task._id }] }))) throw advanced.fail('Detach parent, children and dependencies before changing team');
       if (task.status === 'in_review' && Object.keys(req.body).some(key => !['teamId', 'assignedTo'].includes(key))) throw advanced.fail('Only ownership can change while awaiting review', 409);
+      const changed = advanced.idOf(nextTeam) !== advanced.idOf(task.teamId)
+        || ids.slice().sort().join(',') !== task.assignedTo.map(advanced.idOf).sort().join(',');
       task.teamId = nextTeam;
       task.assignedTo = ids;
-      await reviewService.resetAssignment(req.user, task);
+      if (changed) await reviewService.resetAssignment(req.user, task);
     } else reviewService.assertNotInReview(task);
 
     const sensitiveFields = ['priority', 'dueDate', 'startDate', 'tags', 'difficulty', 'estimatedMinutes', 'storyPoints'];
@@ -322,6 +324,11 @@ const deleteTask = async (req, res) => {
     const canDelete = req.user.role === USER_ROLES.HR_MANAGER || task.assignedBy.toString() === req.user._id.toString();
     if (!canDelete) {
       return res.status(403).json({ success: false, error: 'Permission denied' });
+    }
+
+    if (task.parentTaskId) {
+      const parent = await Task.findById(task.parentTaskId);
+      if (parent) reviewService.assertNotInReview(parent);
     }
 
     task.$locals.previousStatus = task.status;
@@ -387,7 +394,8 @@ const assignTask = async (req, res) => {
     const uniqueAssignees = [...new Set(assignedTo.map((id) => id.toString()))];
     const assigneesInTeam = await User.countDocuments({
       _id: { $in: uniqueAssignees },
-      teamId: task.teamId
+      teamId: task.teamId,
+      isActive: true
     });
     if (assigneesInTeam !== uniqueAssignees.length) {
       return res.status(400).json({
@@ -399,7 +407,7 @@ const assignTask = async (req, res) => {
     const existingAssigneeSet = new Set(task.assignedTo.map((id) => id.toString()));
     const newAssignees = uniqueAssignees.filter((id) => !existingAssigneeSet.has(id));
     task.assignedTo = uniqueAssignees;
-    await reviewService.resetAssignment(req.user, task);
+    if (newAssignees.length || existingAssigneeSet.size !== uniqueAssignees.length) await reviewService.resetAssignment(req.user, task);
     await task.save();
 
     // Notify new assignees
@@ -645,7 +653,7 @@ const addComment = async (req, res) => {
       return res.status(404).json({ success: false, error: 'Task not found' });
     }
 
-    if (!canUserAccessTask(req.user, task)) {
+    if (!canUserAccessTask(req.user, task) && !await reviewService.canDecide(req.user, task)) {
       return res.status(403).json({ success: false, error: 'Access denied' });
     }
 
@@ -662,14 +670,15 @@ const addComment = async (req, res) => {
     await task.populate([
       { path: 'assignedBy', select: 'profile.fullName profile.position profile.avatar email' },
       { path: 'assignedTo', select: 'profile.fullName profile.position profile.avatar email' },
-      { path: 'teamId', select: 'name' },
-      { path: 'comments.userId', select: 'profile.fullName profile.position profile.avatar email role' }
+      { path: 'teamId', select: 'name leaderId' },
+      { path: 'comments.userId', select: 'profile.fullName profile.position profile.avatar email role' },
+      { path: 'review.submittedBy review.rounds.by statusHistory.by', select: advanced.USER_FIELDS }
     ]);
 
     res.json({
       success: true,
       message: 'Comment added successfully',
-      data: task
+      data: { ...enrichTask(task, true), reviewPermissions: { canSubmit: reviewService.isAssignee(req.user, task), canDecide: await reviewService.canDecide(req.user, task) } }
     });
   } catch (error) {
     console.error('Add comment error:', error);

@@ -116,9 +116,13 @@ async function pendingApprovalStats(actor, input = {}) {
   const scope = await pendingScope(actor, input);
   const query = Task.find(scope).cast(Task);
   const rows = await Task.aggregate([{ $match: query }, { $group: { _id: '$teamId', pending: { $sum: 1 },
-    overdueSla: { $sum: { $cond: [{ $lt: ['$review.submittedAt', new Date(Date.now() - SLA_MS)] }, 1, 0] } } } }]);
+    overdueSla: { $sum: { $cond: [{ $and: [{ $ne: ['$review.submittedAt', null] },
+      { $lt: ['$review.submittedAt', new Date(Date.now() - SLA_MS)] }] }, 1, 0] } } } },
+    { $lookup: { from: 'teams', localField: '_id', foreignField: '_id', as: 'team' } },
+    { $set: { teamName: { $ifNull: [{ $arrayElemAt: ['$team.name', 0] }, 'Unavailable team'] } } },
+    { $unset: 'team' }, { $sort: { teamName: 1, _id: 1 } }]);
   return { pending: rows.reduce((n, row) => n + row.pending, 0), overdueSla: rows.reduce((n, row) => n + row.overdueSla, 0),
-    byTeam: rows.map(row => ({ teamId: row._id, pending: row.pending, overdueSla: row.overdueSla })) };
+    byTeam: rows.map(row => ({ teamId: row._id, teamName: row.teamName, pending: row.pending, overdueSla: row.overdueSla })) };
 }
 module.exports = { SLA_MS, isAssignee, assertNotInReview, canDecide, resolveApprovers, submitForReview, approveReview,
   requestChanges, withdrawSubmission, resetAssignment, pendingScope, findPendingApproval, pendingApprovalStats };

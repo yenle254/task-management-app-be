@@ -8,6 +8,7 @@ PERSON_1_CHECKLIST.md
 # Documentation (generated locally)
 docs/
 *.md
+*.txt
 prompt.txt
 # Test coverage reports (generated, not source code)
 coverage/

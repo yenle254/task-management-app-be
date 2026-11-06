@@ -5,7 +5,7 @@ const fs = require('node:fs');
 const { spawn } = require('node:child_process');
 const { chromium } = require('playwright');
 const { expect } = require('@playwright/test');
-module.exports = async ({ apiPort, directory, user, token, taskId, check }) => {
+module.exports = async ({ apiPort, directory, user, token, taskId, employee, hr, employeeTaskId, check }) => {
   const project = path.resolve(__dirname, '../../project');
   const probe = http.createServer(); await new Promise(resolve => probe.listen(0, '127.0.0.1', resolve));
   const port = probe.address().port; await new Promise(resolve => probe.close(resolve));
@@ -36,7 +36,7 @@ module.exports = async ({ apiPort, directory, user, token, taskId, check }) => {
     const page = await context.newPage(), errors = []; page.on('pageerror', error => errors.push(error.message));
     await page.goto(`http://127.0.0.1:${preview.address().port}`);
     await check('browser inbox at 390px and detail show review history, no self-complete controls', async () => {
-      await expect(page.getByText('Approvals & Reviews', { exact: true })).toBeVisible({ timeout: 30000 });
+      await expect(page.getByText('Approvals & Reviews', { exact: true }).last()).toBeVisible({ timeout: 30000 });
       await expect(page.getByText('Browser review task', { exact: true })).toBeVisible();
       await page.evaluate(taskId => window.reviewTest.open('TaskDetail', { taskId }), taskId);
       await expect(page.getByText('Round 1 · Submitted', { exact: true })).toBeVisible();
@@ -66,7 +66,9 @@ module.exports = async ({ apiPort, directory, user, token, taskId, check }) => {
       assert.equal(await page.evaluate(() => window.reviewTest.state().selectedTask.status), 'done');
       await page.setViewportSize({ width: 1280, height: 1000 });
       await page.evaluate(() => window.reviewTest.open('Approvals'));
-      await expect(page.getByText('Approvals & Reviews', { exact: true })).toBeVisible();
+      await expect(page.getByText('Approvals & Reviews', { exact: true }).last()).toBeVisible();
+      await expect(page.getByRole('button', { name: 'Confirm', exact: true })).toHaveCount(0);
+      await page.waitForTimeout(400);
       await page.screenshot({ path: path.join(directory, 'review-inbox-wide.png'), fullPage: true });
     });
     await check('browser per-type settings roundtrip', async () => {
@@ -78,6 +80,50 @@ module.exports = async ({ apiPort, directory, user, token, taskId, check }) => {
     });
     await check('browser selected review screens render without exceptions', async () => assert.deepEqual(errors, []));
     await context.close();
+    const login = async actor => {
+      const session = await browser.newContext({ viewport: { width: 390, height: 900 } });
+      await session.addInitScript(({ token, user }) => { localStorage.setItem('authToken', token); localStorage.setItem('user', JSON.stringify(user)); }, actor);
+      const currentPage = await session.newPage(); currentPage.on('pageerror', error => errors.push(error.message));
+      await currentPage.goto(`http://127.0.0.1:${preview.address().port}`);
+      await currentPage.waitForFunction(() => window.reviewTest && document.body.textContent.includes('Approvals'));
+      return { session, currentPage };
+    };
+    await check('browser employee submits, withdraws, and resubmits without self-approval', async () => {
+      const { session, currentPage: p } = await login(employee);
+      try {
+        await p.evaluate(taskId => window.reviewTest.open('TaskDetail', { taskId }), employeeTaskId);
+        await p.getByRole('button', { name: 'Submit for review', exact: true }).click();
+        await p.getByLabel('Review note').fill('Employee browser submission');
+        await p.getByRole('button', { name: 'Confirm', exact: true }).click();
+        await expect(p.getByText('Round 1 · Submitted', { exact: true })).toBeVisible();
+        assert.equal(await p.getByRole('button', { name: 'Approve', exact: true }).count(), 0);
+        await p.getByRole('button', { name: 'Withdraw submission', exact: true }).click();
+        await p.getByRole('button', { name: 'Confirm', exact: true }).click();
+        await expect(p.getByText('Round 1 · Withdrawn', { exact: true })).toBeVisible();
+        await p.getByRole('button', { name: 'Submit for review', exact: true }).click();
+        await p.getByRole('button', { name: 'Confirm', exact: true }).click();
+        await expect(p.getByText('Round 2 · Submitted', { exact: true })).toBeVisible();
+        await expect(p.getByRole('button', { name: 'Confirm', exact: true })).toHaveCount(0);
+        await p.screenshot({ path: path.join(directory, 'review-employee-mobile.png'), fullPage: true });
+      } finally { await session.close(); }
+    });
+    await check('browser HR reassigns to another assignee and review returns to In Progress', async () => {
+      const { session, currentPage: p } = await login(hr);
+      try {
+        await p.evaluate(taskId => window.reviewTest.open('TaskDetail', { taskId }), employeeTaskId);
+        await p.getByRole('button', { name: 'Reassign (HR)', exact: true }).click();
+        await expect(p.getByRole('button', { name: 'Select assignees (1)', exact: true })).toBeEnabled();
+        await expect(p.getByRole('button', { name: 'Reassign and return to In Progress', exact: true })).toBeDisabled();
+        await p.getByRole('button', { name: 'Select assignees (1)', exact: true }).click();
+        await p.getByText('Review User 0', { exact: true }).last().click();
+        await p.getByText('Review User 5', { exact: true }).last().click();
+        await p.getByText('Confirm', { exact: true }).last().click();
+        await p.getByRole('button', { name: 'Reassign and return to In Progress', exact: true }).click();
+        await expect(p.getByText('Round 2 · Reassigned', { exact: true })).toBeVisible();
+        assert.equal(await p.evaluate(() => window.reviewTest.state().selectedTask.status), 'in_progress');
+        assert.deepEqual(errors, []);
+      } finally { await session.close(); }
+    });
   } finally {
     if (browser) await browser.close(); if (preview) await new Promise(resolve => preview.close(resolve));
     if (metro.exitCode === null) {
