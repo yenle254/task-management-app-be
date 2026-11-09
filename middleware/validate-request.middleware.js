@@ -17,7 +17,7 @@ const validateRequest = (req, res, next) => {
     const formattedErrors = errors.array().map(err => ({
       field: err.path || err.param,
       message: err.msg,
-      value: err.value
+      value: require('../utils/redact.utils').isSensitiveKey(err.path || err.param) ? '[REDACTED]' : err.value
     }));
 
     return res.status(400).json({

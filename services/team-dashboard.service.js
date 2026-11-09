@@ -179,7 +179,7 @@ const getTeamMemberProgress = async (team, startDate, endDate) => {
   }
 
   const tasks = await Task.find(taskQuery)
-    .select('status dueDate statusHistory createdAt assignedTo review.submittedBy')
+    .select('status priority dueDate statusHistory createdAt assignedTo review.submittedBy estimatedMinutes actualMinutes')
     .lean();
 
   // Bucket tasks by assignee (a task may have several assignees).
@@ -220,6 +220,15 @@ const getTeamMemberProgress = async (team, startDate, endDate) => {
       (event) => new Date(event.at) <= new Date(event.dueDate)
     ).length;
 
+    const estimatedMinutes = memberTasks.reduce(
+      (sum, t) => sum + (Number.isFinite(t.estimatedMinutes) && t.estimatedMinutes > 0 ? t.estimatedMinutes : 0),
+      0
+    );
+    const actualMinutes = memberTasks.reduce(
+      (sum, t) => sum + (Number.isFinite(t.actualMinutes) && t.actualMinutes > 0 ? t.actualMinutes : 0),
+      0
+    );
+
     return {
       userId: person.userId,
       userName: person.userName,
@@ -232,7 +241,11 @@ const getTeamMemberProgress = async (team, startDate, endDate) => {
       completionRate: percentage(completedTasks, totalTasks),
       onTimeRate: percentage(onTimeTasks, completedWithDates.length),
       onTimeEligibleTasks: completedWithDates.length,
-      onTimeTasks
+      onTimeTasks,
+      estimatedMinutes,
+      actualMinutes,
+      estimatedHours: Math.round((estimatedMinutes / 60) * 100) / 100,
+      actualHours: Math.round((actualMinutes / 60) * 100) / 100
     };
   });
 };
@@ -248,7 +261,7 @@ const getTeamPerformance = async (team) => {
     teamId: team._id,
     status: { $ne: TASK_STATUS.DELETED }
   })
-    .select('status priority dueDate statusHistory assignedTo')
+    .select('status priority dueDate statusHistory assignedTo estimatedMinutes actualMinutes')
     .lean();
 
   const now = new Date();
@@ -260,8 +273,14 @@ const getTeamPerformance = async (team) => {
     in_review: 0,
     done: 0
   };
+  const byPriority = {
+    low: 0,
+    medium: 0,
+    high: 0
+  };
   for (const t of tasks) {
     if (byStatus[t.status] !== undefined) byStatus[t.status] += 1;
+    if (byPriority[t.priority] !== undefined) byPriority[t.priority] += 1;
   }
 
   const overdueCount = tasks.filter(
@@ -278,6 +297,14 @@ const getTeamPerformance = async (team) => {
       const memberTasks = tasks.filter((t) =>
         (t.assignedTo || []).some((a) => a.toString() === key)
       );
+      const estimatedMinutes = memberTasks.reduce(
+        (sum, t) => sum + (Number.isFinite(t.estimatedMinutes) && t.estimatedMinutes > 0 ? t.estimatedMinutes : 0),
+        0
+      );
+      const actualMinutes = memberTasks.reduce(
+        (sum, t) => sum + (Number.isFinite(t.actualMinutes) && t.actualMinutes > 0 ? t.actualMinutes : 0),
+        0
+      );
       return {
         userId: person.userId,
         userName: person.userName,
@@ -288,7 +315,9 @@ const getTeamPerformance = async (team) => {
         completedTasks: memberTasks.filter(
           (t) => t.status === TASK_STATUS.DONE
         ).length,
-        totalTasks: memberTasks.length
+        totalTasks: memberTasks.length,
+        estimatedHours: Math.round((estimatedMinutes / 60) * 100) / 100,
+        actualHours: Math.round((actualMinutes / 60) * 100) / 100
       };
     })
     .sort((a, b) => b.openTasks - a.openTasks);
@@ -306,6 +335,12 @@ const getTeamPerformance = async (team) => {
       inReview: byStatus.in_review,
       done: byStatus.done
     },
+    priorityCounts: byPriority,
+    byPriority: [
+      { _id: 'high', count: byPriority.high },
+      { _id: 'medium', count: byPriority.medium },
+      { _id: 'low', count: byPriority.low }
+    ],
     inReviewTasks: byStatus.in_review,
     pendingApproval: tasks.filter(t => t.status === TASK_STATUS.IN_REVIEW && !(t.assignedTo || []).some(id => String(id) === String(team.leaderId?._id || team.leaderId))).length,
     completionRate: percentage(byStatus.done, totalTasks),

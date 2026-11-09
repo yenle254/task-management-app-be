@@ -38,4 +38,13 @@ router.put("/password", protect, changePasswordValidation, validateRequest, asyn
 router.get("/me", protect, asyncHandler(getMe));
 router.put("/profile", protect, updateProfileValidation, validateRequest, asyncHandler(updateProfile));
 
+const sessionController = require('../controllers/session.controller');
+const { param } = require('express-validator');
+const { refreshTokenValidation, logoutValidation } = require('../validators/auth.validators');
+const { refreshLimiter } = require('../middleware/rate-limit.middleware');
+router.post('/refresh', refreshLimiter, refreshTokenValidation, validateRequest, sessionController.refresh);
+router.post('/logout', refreshLimiter, logoutValidation, validateRequest, sessionController.logout);
+router.post('/logout-all', protect, sessionController.logoutAll);
+router.get('/sessions', protect, sessionController.list);
+router.delete('/sessions/:sessionId', protect, param('sessionId').isUUID(), validateRequest, sessionController.revoke);
 module.exports = router;

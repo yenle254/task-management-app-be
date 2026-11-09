@@ -12,17 +12,14 @@ const sanitizeServerError = require("./middleware/sanitize-server-error.middlewa
 const logger = require("./utils/logger.utils");
 
 dotenv.config();
-const path = require("path");
+require('./services/token.service').validateTokenConfig();
+const { httpCorsOptions, socketCorsOptions, allowSocketRequest } = require('./config/cors.config');
+const { securityHeaders, permissionsPolicy } = require('./config/security.config');
+const sanitizeInput = require('./middleware/sanitize.middleware');
 const app = express();
 const server = http.createServer(app);
 
-const io = new Server(server, {
-  cors: {
-    origin: process.env.CLIENT_URL || "*",
-    methods: ["GET", "POST"],
-    credentials: true,
-  },
-});
+const io = new Server(server, { cors: socketCorsOptions, allowRequest: allowSocketRequest });
 
 const databaseReady = connectDB();
 
@@ -31,15 +28,14 @@ const databaseReady = connectDB();
 app.use(requestId);
 app.use(sanitizeServerError);
 
-app.use(
-  cors({
-    origin: process.env.CLIENT_URL || "*",
-    credentials: true,
-  })
-);
-
+app.use(requestLogger);
+app.use(securityHeaders());
+app.use(permissionsPolicy);
+app.use(cors(httpCorsOptions));
+app.set('query parser', 'simple'); // Never interpret bracketed input as Mongo operators.
 app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
+app.use(express.urlencoded({ extended: false }));
+app.use(sanitizeInput);
 app.set("io", io);
 
 if (process.env.NODE_ENV === "development") {
@@ -103,7 +99,9 @@ app.use("/api/employees", generalLimiter, employeeRoutes);
 app.use("/api/admin", adminRoutes);
 app.use("/api/ai", generalLimiter, aiRoutes);
 const { setupSwagger } = require("./config/swagger.config");
-app.use("/uploads", express.static(path.join(__dirname, "uploads")));
+const fileRoutes = require('./routes/file.routes');
+app.use('/uploads', fileRoutes);
+app.use('/api/files', fileRoutes);
 setupSwagger(app);
 
 app.use((req, res, next) => {
@@ -113,9 +111,6 @@ app.use((req, res, next) => {
   });
 });
 
-// Request-completion logging must run before the global error handler
-// so that 404s, parser errors, and other failures are also captured.
-app.use(requestLogger);
 
 app.use(errorHandler);
 

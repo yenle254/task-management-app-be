@@ -1,3 +1,4 @@
+const { validateMessageAttachments } = require('../services/message-attachment.service');
 const Message = require('../models/message.model');
 const Conversation = require('../models/conversation.model');
 const User = require('../models/user.model');
@@ -27,15 +28,16 @@ const sendMessage = async (req, res) => {
         }
 
         const receiver = await User.findById(receiverId);
-        if (!receiver) {
+        if (!receiver || !receiver.isActive) {
             return res.status(404).json({
                 success: false,
                 error: 'Receiver not found'
             });
         }
 
+        const safeAttachments = await validateMessageAttachments(attachments, req.user);
         let conversation = await Conversation.findOne({
-            participants: { $all: [senderId, receiverId] }
+            participants: { $all: [senderId, receiverId], $size: 2 }
         });
 
         if (!conversation) {
@@ -51,7 +53,7 @@ const sendMessage = async (req, res) => {
             conversationId: conversation._id,
             senderId,
             message,
-            attachments: attachments || [],
+            attachments: safeAttachments,
             isRead: false
         });
 
@@ -87,7 +89,7 @@ const sendMessage = async (req, res) => {
         });
     } catch (error) {
         console.error('Send message error:', error);
-        res.status(500).json({
+        res.status(error.statusCode || 500).json({
             success: false,
             error: error.message
         });

@@ -61,7 +61,7 @@ const updateUserValidation = [
       return true;
     }),
 
-  body('email')
+  body('email').isString().withMessage('Must be a string').bail()
     .optional()
     .isEmail().withMessage('Invalid email format')
     .normalizeEmail()
@@ -106,26 +106,31 @@ const updateUserValidation = [
 
   body('profile.fullName')
     .optional()
+    .isString().withMessage('Must be a string').bail()
     .trim()
     .isLength({ min: 3, max: 100 }).withMessage('Full name must be between 3 and 100 characters'),
 
   body('profile.department')
     .optional()
+    .isString().withMessage('Must be a string').bail()
     .trim()
     .isLength({ max: 100 }).withMessage('Department must be at most 100 characters'),
 
   body('profile.position')
     .optional()
+    .isString().withMessage('Must be a string').bail()
     .trim()
     .isLength({ max: 100 }).withMessage('Position must be at most 100 characters'),
 
   body('profile.phone')
     .optional({ nullable: true, checkFalsy: true })
+    .isString().withMessage('Must be a string').bail()
     .trim()
     .matches(/^[0-9+\-\s()]{6,20}$/).withMessage('Invalid phone number format'),
 
   body('profile.avatar')
     .optional({ nullable: true, checkFalsy: true })
+    .isString().withMessage('Must be a string').bail()
     .trim(),
 ];
 

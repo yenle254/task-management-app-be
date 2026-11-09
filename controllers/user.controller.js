@@ -1,3 +1,4 @@
+const { revokeUserSessions } = require('../utils/socket-handler.utils');
 const audit = require('../services/audit.service');
 const Team = require("../models/team.model");
 const User = require("../models/user.model");
@@ -81,6 +82,10 @@ const updateUser = async (req, res) => {
         message: "User not found",
       });
     }
+    if (before && (before.role !== user.role || user.isActive === false)) {
+      await require('../services/session.service').revokeAllSessions(userId, 'permissions_changed', req, { increment: false });
+      revokeUserSessions(req.app?.get('io'), userId);
+    }
     audit.changed(req, req.body.role !== undefined && before?.role !== user.role ? 'user.role_changed' : 'user.updated', 'user', before, user, { reason: audit.text(req.body?.reason) || 'No reason provided' });
     res.status(200).json({
       success: true,
@@ -110,6 +115,8 @@ const deleteUser = async (req, res) => {
         message: "User not found",
       });
     }
+    await require('../services/session.service').revokeAllSessions(userId, 'deactivated', req, { increment: false });
+    revokeUserSessions(req.app?.get('io'), userId, 'Account deactivated');
     audit.changed(req, 'user.deactivated', 'user', before, user, { reason: audit.text(req.body?.reason) });
     res.status(200).json({
       success: true,

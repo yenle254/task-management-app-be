@@ -1,4 +1,5 @@
 const reviewService = require('../services/task-review.service');
+const { validateTaskAttachments } = require('../services/message-attachment.service');
 const Task = require('../models/task.model');
 const audit = require('../services/audit.service');
 const { getTaskBeforeImage } = require('../services/task-write-lock.service');
@@ -98,6 +99,7 @@ const createTask = async (req, res) => {
       });
     }
 
+    const safeAttachments = await validateTaskAttachments(attachments, req.user);
     const task = await Task.create({
       title: title.trim(),
       description: description || '',
@@ -112,7 +114,7 @@ const createTask = async (req, res) => {
       tags: advanced.normalizeTags(tags),
       estimatedMinutes: req.body.estimatedMinutes,
       storyPoints: req.body.storyPoints,
-      attachments,
+      attachments: safeAttachments,
       comments,
       progress: 0
     });
@@ -589,7 +591,7 @@ const updateTaskProgress = async (req, res) => {
 const getTeamTasks = async (req, res) => {
   try {
     const { teamId } = req.params;
-    const { page = 1, limit = 10, status } = req.query;
+    const { page = 1, limit = 10, status, priority } = req.query;
 
     // The teamId comes from the client, so the caller's authority over that
     // team is resolved from the database before any task is read.
@@ -607,17 +609,21 @@ const getTeamTasks = async (req, res) => {
     };
 
     if (status) query.status = status;
+    if (priority) query.priority = priority;
+    advanced.applyListFilters(query, req.query);
 
     const skip = (page - 1) * limit;
     const total = await Task.countDocuments(query);
 
-    const tasks = await Task.find(query)
-      .populate('assignedBy', 'profile.fullName profile.position profile.avatar email')
-      .populate('assignedTo', 'profile.fullName profile.position profile.avatar email')
-      .populate('teamId', 'name leaderId')
-      .sort({ createdAt: -1 })
-      .skip(skip)
-      .limit(parseInt(limit));
+    const tasks = req.query.sort
+      ? await advanced.findListTasks(query, { ...req.query, page, limit }, { createdAt: -1 })
+      : await Task.find(query)
+          .populate('assignedBy', 'profile.fullName profile.position profile.avatar email')
+          .populate('assignedTo', 'profile.fullName profile.position profile.avatar email')
+          .populate('teamId', 'name leaderId')
+          .sort({ createdAt: -1 })
+          .skip(skip)
+          .limit(parseInt(limit));
 
     res.json({
       success: true,
@@ -731,7 +737,29 @@ const getOverdueTasks = async (req, res) => {
  */
 const getTaskStats_endpoint = async (req, res) => {
   try {
-    const stats = await getTaskStats(req.user._id);
+    const { scope, teamId } = req.query || {};
+    let stats;
+    if (scope === 'team' || scope === 'all') {
+      if (req.user.role === USER_ROLES.HR_MANAGER) {
+        const match = { status: { $ne: 'deleted' } };
+        if (teamId && mongoose.Types.ObjectId.isValid(teamId)) {
+          match.teamId = new mongoose.Types.ObjectId(teamId);
+        }
+        stats = await getTaskStats(req.user._id, match);
+      } else {
+        const targetTeamId = req.user.teamId?._id || req.user.teamId;
+        if (!targetTeamId || !mongoose.Types.ObjectId.isValid(targetTeamId)) {
+          stats = { total: 0, todo: 0, in_progress: 0, in_review: 0, done: 0, overdue: 0 };
+        } else {
+          stats = await getTaskStats(req.user._id, {
+            teamId: new mongoose.Types.ObjectId(targetTeamId),
+            status: { $ne: 'deleted' }
+          });
+        }
+      }
+    } else {
+      stats = await getTaskStats(req.user._id);
+    }
 
     res.json({
       success: true,

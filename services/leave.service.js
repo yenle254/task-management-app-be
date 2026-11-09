@@ -42,9 +42,10 @@ const getLeaveBalance = async (userId, year = new Date().getFullYear()) => {
  */
 const canApproveLeave = (approver, leave) => {
     const id = value => String(value?._id || value || '');
-    if (approver.isActive === false || id(approver) === id(leave.userId)) return false;
+    if (approver.isActive === false) return false;
     if (!['pending_team_lead', 'pending_hr'].includes(leave.status)) return false;
     if (approver.role === 'hr_manager') return true;
+    if (id(approver) === id(leave.userId)) return false;
     return approver.role === 'team_lead' && leave.status === 'pending_team_lead' &&
         leave.currentStep === 'team_lead' && !!approver.teamId &&
         id(approver.teamId) === id(leave.teamSnapshot) &&

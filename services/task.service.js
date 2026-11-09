@@ -32,14 +32,15 @@ const checkIfOverdue = (task) => {
  * @param {String} userId - User ID
  * @returns {Object} { total, todo, in_progress, done, overdue }
  */
-const getTaskStats = async (userId) => {
+const getTaskStats = async (userId, matchFilter = null) => {
   try {
+    const match = matchFilter || {
+      assignedTo: new mongoose.Types.ObjectId(userId),
+      status: { $ne: 'deleted' }
+    };
     const stats = await Task.aggregate([
       {
-        $match: {
-          assignedTo: new mongoose.Types.ObjectId(userId),
-          status: { $ne: 'deleted' }
-        }
+        $match: match
       },
       {
         $group: {

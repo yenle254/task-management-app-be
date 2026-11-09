@@ -7,11 +7,13 @@ const { OFFICE } = require('../utils/constants.utils');
 const createOfficeValidation = [
   body('name')
     .optional()
+    .isString().withMessage('Must be a string').bail()
     .trim()
     .isLength({ min: 1, max: 100 }).withMessage('Name must be 1-100 characters'),
 
   body('address')
     .optional()
+    .isString().withMessage('Must be a string').bail()
     .trim()
     .isLength({ max: 500 }).withMessage('Address must be at most 500 characters'),
 
@@ -28,11 +30,11 @@ const createOfficeValidation = [
     .isInt({ min: OFFICE.MIN_RADIUS, max: OFFICE.MAX_RADIUS })
     .withMessage(`Radius must be between ${OFFICE.MIN_RADIUS} and ${OFFICE.MAX_RADIUS} meters`),
 
-  body('workingHours.start')
+  body('workingHours.start').isString().withMessage('Must be a string').bail()
     .optional()
     .matches(/^([01]?[0-9]|2[0-3]):[0-5][0-9]$/).withMessage('Start time must be in HH:mm format'),
 
-  body('workingHours.end')
+  body('workingHours.end').isString().withMessage('Must be a string').bail()
     .optional()
     .matches(/^([01]?[0-9]|2[0-3]):[0-5][0-9]$/).withMessage('End time must be in HH:mm format'),
 
@@ -47,11 +49,13 @@ const updateOfficeValidation = [
 
   body('name')
     .optional()
+    .isString().withMessage('Must be a string').bail()
     .trim()
     .isLength({ min: 1, max: 100 }).withMessage('Name must be 1-100 characters'),
 
   body('address')
     .optional()
+    .isString().withMessage('Must be a string').bail()
     .trim()
     .isLength({ max: 500 }).withMessage('Address must be at most 500 characters'),
 
@@ -68,11 +72,11 @@ const updateOfficeValidation = [
     .isInt({ min: OFFICE.MIN_RADIUS, max: OFFICE.MAX_RADIUS })
     .withMessage(`Radius must be between ${OFFICE.MIN_RADIUS} and ${OFFICE.MAX_RADIUS} meters`),
 
-  body('workingHours.start')
+  body('workingHours.start').isString().withMessage('Must be a string').bail()
     .optional()
     .matches(/^([01]?[0-9]|2[0-3]):[0-5][0-9]$/).withMessage('Start time must be in HH:mm format'),
 
-  body('workingHours.end')
+  body('workingHours.end').isString().withMessage('Must be a string').bail()
     .optional()
     .matches(/^([01]?[0-9]|2[0-3]):[0-5][0-9]$/).withMessage('End time must be in HH:mm format'),
 

@@ -399,7 +399,10 @@ const getAttendanceStats = async (req, res) => {
 const updateAttendance = async (req, res) => {
     try {
         const { id } = req.params;
-        const updates = req.body;
+        const updates = req.body || {};
+        const allowed = ['clockIn', 'clockOut', 'status', 'workHours', 'location', 'autoClockOut', 'reason'];
+        const rejected = Object.keys(updates).filter(key => !allowed.includes(key));
+        if (rejected.length) return res.status(400).json({ success: false, error: `Unsupported fields: ${rejected.join(', ')}` });
         const attendanceRecord = await Attendance.findById(id);
         if (!attendanceRecord) {
             return res.status(404).json({
@@ -409,7 +412,7 @@ const updateAttendance = async (req, res) => {
         }
 
         const before = audit.snapshot('attendance', attendanceRecord);
-        Object.keys(updates).forEach(key => {
+        allowed.filter(key => key !== 'reason' && Object.prototype.hasOwnProperty.call(updates, key)).forEach(key => {
             attendanceRecord[key] = updates[key];
         });
         await attendanceRecord.save();

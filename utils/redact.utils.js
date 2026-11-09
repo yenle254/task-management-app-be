@@ -1,5 +1,5 @@
 // Shared by operational logging and audit. Test key segments, never secret values.
-const SENSITIVE_KEY_PATTERN = /^(password|passwordHash|token|otp|refresh[_-]?token|access[_-]?token|id[_-]?token|reset[_-]?token|authorization|cookie|push[_-]?token.*|client[_-]?secret|resetPassword|reminders|leaveBalanceOperations|notificationPreferences)$/i;
+const SENSITIVE_KEY_PATTERN = /^(password|passwordHash|tokenHash|previousTokenHash|usedTokens|tokenVersion|token|otp|refresh[_-]?token|access[_-]?token|id[_-]?token|reset[_-]?token|authorization|cookie|push[_-]?token.*|client[_-]?secret|resetPassword|reminders|leaveBalanceOperations|notificationPreferences)$/i;
 const isSensitiveKey = key => String(key).split('.').some(part => SENSITIVE_KEY_PATTERN.test(part));
 
 function redactMeta(meta, seen = new WeakSet()) {

@@ -12,6 +12,7 @@ const { PASSWORD, USER_ROLES } = require('../utils/constants.utils');
  */
 const registerValidation = [
   body('email')
+    .isString().withMessage('Must be a string').bail()
     .trim()
     .notEmpty().withMessage('Email is required')
     .isEmail().withMessage('Invalid email format')
@@ -25,7 +26,7 @@ const registerValidation = [
       return true;
     }),
 
-  body('password')
+  body('password').isString().withMessage('Must be a string').bail()
     .notEmpty().withMessage('Password is required')
     .isLength({ min: PASSWORD.MIN_LENGTH, max: PASSWORD.MAX_LENGTH })
     .withMessage(`Password must be between ${PASSWORD.MIN_LENGTH} and ${PASSWORD.MAX_LENGTH} characters`),
@@ -36,27 +37,32 @@ const registerValidation = [
     .withMessage('Invalid role'),
 
   body('profile.fullName')
+    .isString().withMessage('Must be a string').bail()
     .trim()
     .notEmpty().withMessage('Full name is required')
     .isLength({ min: 3, max: 100 }).withMessage('Full name must be between 3 and 100 characters'),
 
   body('profile.employeeId')
+    .isString().withMessage('Must be a string').bail()
     .trim()
     .notEmpty().withMessage('Employee ID is required')
     .isLength({ max: 50 }).withMessage('Employee ID must be at most 50 characters'),
 
   body('profile.department')
     .optional()
+    .isString().withMessage('Must be a string').bail()
     .trim()
     .isLength({ max: 100 }).withMessage('Department must be at most 100 characters'),
 
   body('profile.position')
     .optional()
+    .isString().withMessage('Must be a string').bail()
     .trim()
     .isLength({ max: 100 }).withMessage('Position must be at most 100 characters'),
 
   body('profile.phone')
     .optional()
+    .isString().withMessage('Must be a string').bail()
     .trim()
     .matches(/^[0-9+\-\s()]{6,20}$/).withMessage('Invalid phone number format')
 ];
@@ -66,12 +72,14 @@ const registerValidation = [
  */
 const loginValidation = [
   body('email')
+    .isString().withMessage('Must be a string').bail()
     .trim()
     .notEmpty().withMessage('Email is required')
     .isEmail().withMessage('Invalid email format')
     .normalizeEmail(),
 
   body('password')
+    .isString().withMessage('Password must be a string').bail()
     .notEmpty().withMessage('Password is required')
 ];
 
@@ -80,6 +88,7 @@ const loginValidation = [
  */
 const forgotPasswordValidation = [
   body('email')
+    .isString().withMessage('Must be a string').bail()
     .trim()
     .notEmpty().withMessage('Email is required')
     .isEmail().withMessage('Invalid email format')
@@ -91,12 +100,14 @@ const forgotPasswordValidation = [
  */
 const verifyOTPValidation = [
   body('email')
+    .isString().withMessage('Must be a string').bail()
     .trim()
     .notEmpty().withMessage('Email is required')
     .isEmail().withMessage('Invalid email format')
     .normalizeEmail(),
 
   body('otp')
+    .isString().withMessage('Must be a string').bail()
     .trim()
     .notEmpty().withMessage('OTP is required')
     .isLength({ min: PASSWORD.OTP_LENGTH, max: PASSWORD.OTP_LENGTH })
@@ -109,16 +120,18 @@ const verifyOTPValidation = [
  */
 const resetPasswordValidation = [
   body('email')
+    .isString().withMessage('Must be a string').bail()
     .trim()
     .notEmpty().withMessage('Email is required')
     .isEmail().withMessage('Invalid email format')
     .normalizeEmail(),
 
   body('resetToken')
+    .isString().withMessage('Must be a string').bail()
     .trim()
     .notEmpty().withMessage('Reset token is required'),
 
-  body('newPassword')
+  body('newPassword').isString().withMessage('Must be a string').bail()
     .notEmpty().withMessage('New password is required')
     .isLength({ min: PASSWORD.MIN_LENGTH, max: PASSWORD.MAX_LENGTH })
     .withMessage(`Password must be between ${PASSWORD.MIN_LENGTH} and ${PASSWORD.MAX_LENGTH} characters`)
@@ -129,9 +142,10 @@ const resetPasswordValidation = [
  */
 const changePasswordValidation = [
   body('oldPassword')
+    .isString().withMessage('Password must be a string').bail()
     .notEmpty().withMessage('Old password is required'),
 
-  body('newPassword')
+  body('newPassword').isString().withMessage('Must be a string').bail()
     .notEmpty().withMessage('New password is required')
     .isLength({ min: PASSWORD.MIN_LENGTH, max: PASSWORD.MAX_LENGTH })
     .withMessage(`Password must be between ${PASSWORD.MIN_LENGTH} and ${PASSWORD.MAX_LENGTH} characters`)
@@ -149,31 +163,46 @@ const changePasswordValidation = [
 const updateProfileValidation = [
   body('fullName')
     .optional()
+    .isString().withMessage('Must be a string').bail()
     .trim()
     .isLength({ min: 3, max: 100 }).withMessage('Full name must be between 3 and 100 characters'),
 
   body('department')
     .optional({ nullable: true, checkFalsy: true })
+    .isString().withMessage('Must be a string').bail()
     .trim()
     .isLength({ max: 100 }).withMessage('Department must be at most 100 characters'),
 
   body('position')
     .optional({ nullable: true, checkFalsy: true })
+    .isString().withMessage('Must be a string').bail()
     .trim()
     .isLength({ max: 100 }).withMessage('Position must be at most 100 characters'),
 
   body('phone')
     .optional({ nullable: true, checkFalsy: true })
+    .isString().withMessage('Must be a string').bail()
     .trim()
     .matches(/^[0-9+\-\s()]{6,20}$/).withMessage('Invalid phone number format'),
 
   body('avatar')
     .optional({ nullable: true, checkFalsy: true })
+    .isString().withMessage('Must be a string').bail()
     .trim()
     .isURL().withMessage('Avatar must be a valid URL')
 ];
 
+const refreshTokenValidation = [
+  body('refreshToken').isString().withMessage('Refresh token must be a string').bail()
+    .matches(/^[A-Za-z0-9_-]{64}$/).withMessage('Invalid refresh token format')
+];
+// Logout deliberately accepts unknown/malformed credentials and returns200 (idempotent, no token oracle).
+// Coerce only the optional credential; non-scalar bodies never reach a database query.
+const logoutValidation = [body('refreshToken').optional().customSanitizer(value => typeof value === 'string' && value.length <= 256 ? value : undefined)];
+
 module.exports = {
+  refreshTokenValidation,
+  logoutValidation,
   registerValidation,
   loginValidation,
   forgotPasswordValidation,

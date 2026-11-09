@@ -89,7 +89,19 @@ const auditLimiter = rateLimit({
   skip: () => process.env.NODE_ENV === 'test'
 });
 
+const fileLimiter = rateLimit({
+  windowMs: TIME.RATE_LIMIT_WINDOW_MS, max: 300,
+  message: { success: false, error: 'Too many file requests. Please try again later.' },
+  standardHeaders: true, legacyHeaders: false,
+  skip: () => process.env.NODE_ENV === 'test'
+});
+
+const refreshLimiter = rateLimit({ windowMs: TIME.RATE_LIMIT_WINDOW_MS, max: 60,
+  message: { success: false, error: 'Too many refresh requests. Please try again later.' },
+  standardHeaders: true, legacyHeaders: false, skip: () => process.env.NODE_ENV === 'test' });
 module.exports = {
+  refreshLimiter,
+  fileLimiter,
   auditLimiter,
   generalLimiter,
   notificationReadLimiter,

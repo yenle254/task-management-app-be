@@ -81,6 +81,7 @@ const updateUser = async (userId, updateData) => {
   ];
 
   const sanitizedData = {};
+  let roleChanged = false;
   allowedFields.forEach(field => {
     if (updateData[field] !== undefined) {
       sanitizedData[field] = updateData[field];
@@ -119,12 +120,13 @@ const updateUser = async (userId, updateData) => {
       }
     }
 
+    roleChanged = existingUser.role !== updateData.role;
     sanitizedData.role = updateData.role;
   }
 
   const user = await User.findByIdAndUpdate(
     userId,
-    { $set: sanitizedData },
+    { $set: sanitizedData, ...(roleChanged ? { $inc: { tokenVersion: 1 } } : {}) },
     { new: true, runValidators: true }
   ).select("-password");
 
@@ -140,7 +142,7 @@ const updateUser = async (userId, updateData) => {
 const deleteUser = async (userId) => {
   return await User.findByIdAndUpdate(
     userId,
-    { isActive: false }, 
+    { $set: { isActive: false, resetPassword: {} }, $inc: { tokenVersion: 1 } },
     { new: true }
   );
 };

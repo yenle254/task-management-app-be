@@ -1,3 +1,4 @@
+const sessions = require('../services/session.service');
 const audit = require('../services/audit.service');
 const authAudit = (req, action, user, extra = {}) => {
   // A failed login/recovery attempt does not authenticate the target account.
@@ -70,7 +71,7 @@ const register = async (req, res) => {
     });
 
     authAudit(req, 'auth.register', user);
-    sendTokenResponse(user, 201, res);
+    await sendTokenResponse(user, 201, res, req);
   } catch (error) {
     console.error("Register error:", error);
     res.status(500).json({
@@ -89,7 +90,7 @@ const login = async (req, res) => {
   try {
     const { email, password } = req.body;
 
-    const user = await User.findOne({ email }).select("+password");
+    const user = await User.findOne({ email }).select("+password +tokenVersion");
 
     if (!user) {
       authAudit(req, 'auth.login_failed', null, { outcome: 'failure', reason: 'invalid_email_or_password', metadata: { email: audit.maskEmail(email) } });
@@ -119,7 +120,7 @@ const login = async (req, res) => {
 
     const auditActor = { _id: String(user._id), role: user.role, email: user.email, profile: { fullName: user.profile?.fullName } };
     const auditRequest = { ...req, ip: req.ip };
-    sendTokenResponse(user, 200, res);
+    await sendTokenResponse(user, 200, res, req);
     authAudit(auditRequest, 'auth.login_success', auditActor);
   } catch (error) {
     res.status(500).json({
@@ -145,7 +146,7 @@ const forgotPassword = async (req, res) => {
       });
     }
 
-    const user = await User.findOne({ email: email.toLowerCase().trim() });
+    const user = await User.findOne({ email: email.toLowerCase().trim() }).select("+resetPassword +tokenVersion");
 
     if (!user) {
       return res.status(404).json({
@@ -211,7 +212,7 @@ const verifyOTP = async (req, res) => {
       });
     }
 
-    const user = await User.findOne({ email: email.toLowerCase().trim() });
+    const user = await User.findOne({ email: email.toLowerCase().trim() }).select("+resetPassword +tokenVersion");
 
     if (!user) {
       return res.status(404).json({
@@ -219,6 +220,8 @@ const verifyOTP = async (req, res) => {
         error: "User not found",
       });
     }
+
+    if (!user.isActive) return res.status(401).json({ success: false, error: "Account is deactivated" });
 
     if (!user.resetPassword || !user.resetPassword.otp) {
       return res.status(400).json({
@@ -309,7 +312,7 @@ const resetPassword = async (req, res) => {
       });
     }
 
-    const user = await User.findOne({ email: email.toLowerCase().trim() });
+    const user = await User.findOne({ email: email.toLowerCase().trim() }).select("+resetPassword +tokenVersion");
 
     if (!user) {
       return res.status(404).json({
@@ -317,6 +320,8 @@ const resetPassword = async (req, res) => {
         error: "User not found",
       });
     }
+
+    if (!user.isActive) return res.status(401).json({ success: false, error: "Account is deactivated" });
 
     // Kiểm tra reset token
     if (
@@ -342,9 +347,11 @@ const resetPassword = async (req, res) => {
     }
 
     // Hash password mới và lưu
-    user.password = await hashPassword(newPassword);
-    user.resetPassword = {}; // Xóa tất cả dữ liệu reset
-    await user.save();
+    const updated = await User.findOneAndUpdate({ _id: user._id, isActive: true,
+      'resetPassword.resetToken': resetToken, 'resetPassword.resetTokenExpires': { $gt: new Date() } },
+      { $set: { password: await hashPassword(newPassword), resetPassword: {} }, $inc: { tokenVersion: 1 } }, { new: true });
+    if (!updated) return res.status(400).json({ success: false, error: 'Invalid or expired reset token' });
+    await sessions.revokeAllSessions(user._id, 'password_reset', req, { increment: false });
     authAudit(req, 'auth.password_reset_completed', user);
 
     res.status(200).json({
@@ -377,7 +384,7 @@ const resendOTP = async (req, res) => {
       });
     }
 
-    const user = await User.findOne({ email: email.toLowerCase().trim() });
+    const user = await User.findOne({ email: email.toLowerCase().trim() }).select("+resetPassword +tokenVersion");
 
     if (!user) {
       return res.status(404).json({
@@ -385,6 +392,8 @@ const resendOTP = async (req, res) => {
         error: "No account found with this email",
       });
     }
+
+    if (!user.isActive) return res.status(401).json({ success: false, error: "Account is deactivated" });
 
     // Tạo OTP mới
     const otp = generateOTP();
@@ -427,7 +436,7 @@ const changePassword = async (req, res) => {
   try {
     const userId = req.user._id;
     const { oldPassword, newPassword } = req.body;
-    const user = await User.findById(userId).select("+password");
+    const user = await User.findById(userId).select("+password +tokenVersion");
     const isMatch = await comparePassword(oldPassword, user.password);
     if (!isMatch) {
       return res.status(400).json({
@@ -436,13 +445,18 @@ const changePassword = async (req, res) => {
       });
     }
 
-    user.password = await hashPassword(newPassword);
-    await user.save();
+    const updated = await User.findOneAndUpdate({ _id: userId, password: user.password, isActive: true },
+      { $set: { password: await hashPassword(newPassword), resetPassword: {} }, $inc: { tokenVersion: 1 } },
+      { new: true }).select('+tokenVersion');
+    if (!updated) return res.status(409).json({ success: false, error: 'Account changed. Please sign in again.' });
+    await sessions.revokeAllSessions(userId, 'password_changed', req, { increment: false });
+    const pair = await sessions.createSession(updated, req);
     authAudit(req, 'auth.password_changed', user);
 
     res.status(200).json({
       success: true,
       message: "Password changed successfully",
+      ...pair,
     });
   } catch (error) {
     res.status(500).json({

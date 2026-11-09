@@ -1,0 +1,42 @@
+[
+  {
+    "name": "real Mongo indexes, hidden reset data, hashed-only session and 15m JWT",
+    "status": "PASS"
+  },
+  {
+    "name": "me/profile retain data contract and never expose recovery credentials",
+    "status": "PASS"
+  },
+  {
+    "name": "real atomic Mongo rotation: 12 requests, one200 and eleven409, next rotation succeeds",
+    "status": "PASS"
+  },
+  {
+    "name": "oldest refresh replay outside grace revokes all devices and records critical audit",
+    "status": "PASS"
+  },
+  {
+    "name": "real sockets: single-device logout disconnects only matching sid, other HTTP/socket stays usable",
+    "status": "PASS"
+  },
+  {
+    "name": "real password change revokes old access/refresh/socket and replacement pair works",
+    "status": "PASS"
+  },
+  {
+    "name": "real forgot/verify/reset consumes reset token once and invalidates active sessions",
+    "status": "PASS"
+  },
+  {
+    "name": "deactivate then reactivate cannot resurrect either credential",
+    "status": "PASS"
+  },
+  {
+    "name": "real browser frontend: login, concurrent expired access recovery, private blob preview",
+    "status": "PASS"
+  },
+  {
+    "name": "real browser socket expiry refresh/reconnect, password change stays signed in, logout clears storage",
+    "status": "PASS"
+  }
+]

@@ -1,6 +1,7 @@
 const audit = require('../services/audit.service');
 const rejectAuthentication = req => audit.record({ ...req, ip: req.ip, user: null }, { action: 'security.auth_rejected', outcome: 'denied' });
 const { verifyToken } = require('../config/jwt');
+const { assertAccessSession } = require('../services/session.service');
 const User = require('../models/user.model');
 
 const protect = async (req, res, next) => {
@@ -18,10 +19,12 @@ const protect = async (req, res, next) => {
         });
     }
 
+    let verified = false;
     try {
         const decoded = verifyToken(token);
+        verified = true;
 
-        req.user = await User.findById(decoded.id).select('-password');
+        req.user = await User.findById(decoded.sub || decoded.id).select('-password +tokenVersion');
 
         if (!req.user) {
             rejectAuthentication(req);
@@ -39,12 +42,16 @@ const protect = async (req, res, next) => {
             });
         }
 
+        await assertAccessSession(decoded, req.user);
+        req.auth = decoded;
         next();
     } catch (error) {
+        if (verified && !error.statusCode) return res.status(500).json({ success: false, error: 'Unable to validate session', code: 'session_error' });
         rejectAuthentication(req);
         return res.status(401).json({
             success: false,
-            error: error.message || 'Not authorized to access this route'
+            error: error.message || 'Not authorized to access this route',
+            code: error.code || 'invalid_token'
         });
     }
 };

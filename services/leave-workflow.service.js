@@ -19,7 +19,10 @@ const event = (leave, actor, action, to, reason, revision = leave.revision + 1) 
 // Team.leaderId is authoritative. managerId never silently changes the approver.
 async function resolveApproverSnapshot(requester, { legacy = false } = {}) {
     if (requester.role === 'system_admin' && !legacy) fail(409, 'No eligible leave approver for system_admin');
-    const hr = await User.find({ role: 'hr_manager', isActive: true, _id: { $ne: requester._id } }).select('_id').lean();
+    const hrQuery = requester.role === 'hr_manager'
+        ? { role: 'hr_manager', isActive: true }
+        : { role: 'hr_manager', isActive: true, _id: { $ne: requester._id } };
+    const hr = await User.find(hrQuery).select('_id').lean();
     if (!hr.length && !legacy) fail(409, 'No eligible HR approver');
     const resolvedAt = new Date();
     const approverSnapshot = hr.map(user => ({ role: 'hr_manager', userId: user._id, active: true, resolvedAt }));
@@ -153,7 +156,7 @@ async function transition(actor, leaveId, action, input = {}, request = { user: 
         if (action === 'submit') Object.assign(updates, await resolveApproverSnapshot(actor));
         else Object.assign(updates, { status: 'pending_team_lead', currentStep: 'team_lead' });
     } else if (action === 'approve' || action === 'reject') {
-        if (owner) fail(403, 'Self approval/rejection is not permitted');
+        if (owner && actor.role !== 'hr_manager') fail(403, 'Self approval/rejection is not permitted');
         if (!LEAVE_PENDING_STATUSES.includes(leave.status)) fail(400, `Leave already ${leave.status}`);
         if (!await canDecide(actor, leave)) fail(403, 'Not an eligible approver for this step');
         updates.status = action === 'reject' ? 'rejected' : actor.role === 'hr_manager' ? 'approved' : 'pending_hr';

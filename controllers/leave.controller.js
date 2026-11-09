@@ -60,7 +60,10 @@ const getLeaveById = async (req, res) => {
 };
 const getPendingLeaves = async (req, res) => {
     try {
-        const query = { status: { $in: LEAVE_PENDING_STATUSES }, userId: { $ne: req.user._id } };
+        const query = {
+            status: { $in: LEAVE_PENDING_STATUSES },
+            ...(req.user.role === 'hr_manager' ? {} : { userId: { $ne: req.user._id } })
+        };
         if (req.query.step) query.currentStep = req.query.step;
         if (req.user.role === 'team_lead') {
             Object.assign(query, await teamScope(req.user), { status: 'pending_team_lead', currentStep: 'team_lead',
