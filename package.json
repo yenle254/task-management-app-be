@@ -6,10 +6,13 @@
   "scripts": {
     "start": "node server.js",
     "dev": "nodemon server.js",
+    "check:config": "node scripts/check-config.js",
     "seed": "node seed.js",
     "test": "jest",
     "test:watch": "jest --watch",
     "test:coverage": "jest --coverage",
+    "test:ci": "jest --ci --runInBand --coverage",
+    "test:docker": "node tests/docker-smoke.cjs",
     "test:unit": "jest tests/unit",
     "test:integration": "jest tests/integration",
     "test:clear": "jest --clearCache"
@@ -24,6 +27,9 @@
   "author": "",
   "license": "ISC",
   "type": "commonjs",
+  "engines": {
+    "node": "^22.13.1 || ^24.0.0"
+  },
   "dependencies": {
     "axios": "^1.13.2",
     "bcryptjs": "^2.4.3",
@@ -32,14 +38,18 @@
     "date-fns": "^4.1.0",
     "dotenv": "^17.2.3",
     "express": "^5.1.0",
+    "express-mongo-sanitize": "^2.2.0",
     "express-rate-limit": "^8.7.1",
     "express-validator": "^7.0.1",
+    "helmet": "^8.3.0",
+    "hpp": "^0.2.3",
     "jsonwebtoken": "^9.0.2",
     "mongoose": "^8.19.3",
     "multer": "^2.0.2",
     "multer-storage-cloudinary": "^2.2.1",
     "nodemailer": "^7.0.12",
-    "socket.io": "^4.8.1"
+    "socket.io": "^4.8.1",
+    "swagger-ui-express": "^5.0.1"
   },
   "devDependencies": {
     "@playwright/test": "^1.63.0",
@@ -50,6 +60,7 @@
     "jest": "^30.5.2",
     "jest-extended": "^7.0.0",
     "nodemon": "^3.0.1",
+    "socket.io-client": "4.8.1",
     "supertest": "^7.3.1"
   }
 }

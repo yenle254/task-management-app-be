@@ -5,6 +5,7 @@ jest.mock('../../../config/jwt', () => ({ verifyToken: jest.fn() }));
 jest.mock('../../../services/email.service', () => ({ sendResetPasswordEmail: jest.fn() }));
 jest.mock('../../../services/expo-push.service', () => ({ send: jest.fn() }));
 const { verifyToken } = require('../../../config/jwt');
+const Session = require('../../../models/refresh-session.model');
 const User = require('../../../models/user.model');
 const AuditLog = require('../../../models/audit-log.model');
 const logger = require('../../../utils/logger.utils');
@@ -24,6 +25,7 @@ const matches = (entry, query) => Object.entries(query).every(([key, expected]) 
   return key === 'at' ? new Date(value) >= expected.$gte && new Date(value) < expected.$lt : String(value) === String(expected);
 });
 beforeEach(() => {
+  jest.spyOn(Session, 'updateMany').mockResolvedValue({ modifiedCount: 0 });
   rows = [];
   users = { [adminId]: { _id: adminId, role: 'system_admin', isActive: true }, [hrId]: { _id: hrId, role: 'hr_manager', isActive: true },
     [targetId]: { _id: targetId, role: 'employee', isActive: true, profile: { fullName: 'Employee snapshot', department: 'Sales' },

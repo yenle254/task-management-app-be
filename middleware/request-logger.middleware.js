@@ -12,7 +12,8 @@ function normalizeRoute(req) {
     const base = req.baseUrl || '';
     return base + req.route.path;
   }
-  // Fall back to pathname without query string
+  // Never include query credentials (notably access_token on private previews).
+  // Fall back to pathname without query string.
   if (req.path) return req.path;
   if (req.url) return req.url.split('?')[0];
   return undefined;

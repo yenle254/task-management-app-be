@@ -12,8 +12,8 @@ function harness({ platform = 'android', status = 200, granted = true, failDownl
   let permissionRequests = 0;
   const fileSystem = {
     cacheDirectory: 'file:///cache/', EncodingType: { Base64: 'base64' },
-    async downloadAsync(url, uri) {
-      downloads.push({ url, uri });
+    async downloadAsync(url, uri, options) {
+      downloads.push({ url, uri, options });
       if (failDownload) throw new Error('Network connection failed');
       return { uri, status };
     },
@@ -36,6 +36,9 @@ function harness({ platform = 'android', status = 200, granted = true, failDownl
       plugins: [frontendRequire.resolve('@babel/plugin-transform-modules-commonjs')],
     }).code;
     new Function('require', 'module', 'exports', 'console', code)(name => {
+      // Private downloads now read a token and pass Bearer headers. Existing error/save assertions remain.
+      if (name.endsWith('tokenManager')) return { getValidAccessToken: async () => 'file-test-token', getAuthGeneration: () => 0, refreshAccessToken: async () => 'file-test-token', expireSession: async () => {} };
+      if (name.endsWith('authStorage')) return { getToken: async () => 'file-test-token' };
       if (name === 'expo-file-system/legacy') return fileSystem;
       if (name === 'expo-sharing') return { isAvailableAsync: async () => sharing, shareAsync: async (...args) => shares.push(args) };
       if (name === 'react-native') return { Platform: { OS: platform }, Alert: { alert: (...args) => alerts.push(args) } };
@@ -127,4 +130,14 @@ test('an invalid URL is rejected before accessing storage or opening the folder 
   assert.equal(await h.downloadFile('', 'file.pdf'), null);
   assert.deepEqual(h.downloads, []); assert.deepEqual(h.removed, []);
   assert.match(h.alerts[0][1], /valid download URL/);
+});
+
+
+test('private downloads send Bearer headers; external origins never receive the token', async () => {
+  const h = harness();
+  await h.downloadFile('/uploads/report.pdf?access_token=old-token', 'report.pdf');
+  assert.equal(h.downloads[0].options.headers.Authorization, 'Bearer file-test-token');
+  assert.equal(h.downloads[0].url, 'http://localhost:3000/uploads/report.pdf');
+  await h.downloadFile('https://external.test/report.pdf', 'report.pdf');
+  assert.deepEqual(h.downloads[1].options, {});
 });

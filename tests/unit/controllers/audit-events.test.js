@@ -1,4 +1,5 @@
 const mongoose = require('mongoose');
+jest.mock('../../../services/session.service', () => ({ revokeAllSessions: jest.fn().mockResolvedValue(), createSession: jest.fn().mockResolvedValue({ token: 'replacement', refreshToken: 'opaque' }) }));
 jest.mock('../../../services/email.service', () => ({ sendResetPasswordEmail: jest.fn().mockResolvedValue() }));
 jest.mock('../../../services/expo-push.service', () => ({ send: jest.fn() }));
 jest.mock('../../../services/auth.service', () => ({ hashPassword: jest.fn().mockResolvedValue('hashed'), comparePassword: jest.fn().mockResolvedValue(true) }));
@@ -45,7 +46,8 @@ test.each(['missing', 'password', 'inactive'])('login failure %s has safe metada
 test('register/login and existing admin HR creation emit correct actors/targets', async () => {
   jest.spyOn(User, 'findOne').mockReturnValueOnce(chain(null)).mockReturnValue(chain(user));
   jest.spyOn(User, 'create').mockResolvedValue(user);
-  await auth.register(req({ email: user.email, password: 'Secret', profile: { fullName: 'Member', employeeId: 'E01' } }), response());
+  await auth.register(req({ email: user.email, password: 'Secret', role: 'hr_manager', profile: { fullName: 'Member', employeeId: 'E01' } }), response());
+  expect(User.create).toHaveBeenCalledWith(expect.objectContaining({ role: 'employee' }));
   await auth.login(req({ email: user.email, password: 'Secret' }), response());
   jest.spyOn(adminService, 'createHRAccount').mockResolvedValue(user);
   const request = req({ email: user.email, password: 'Secret', profile: { fullName: 'HR', employeeId: 'H01' } }); request.user.role = 'system_admin';
@@ -80,6 +82,7 @@ test.each([['invalid_otp', { otp: '111111' }], ['expired', { otpExpires: new Dat
   expect(JSON.stringify(rows)).not.toContain('123456');
 });
 test('reset/change password success audit excludes all reset data', async () => {
+  jest.spyOn(User, 'findOneAndUpdate').mockImplementation(() => chain(user));
   user.resetPassword = { resetToken: 'ResetSecret', resetTokenExpires: new Date(Date.now() + 60000) };
   jest.spyOn(User, 'findOne').mockReturnValue(chain(user)); jest.spyOn(User, 'findById').mockReturnValue(chain(user));
   await auth.resetPassword(req({ email: user.email, resetToken: 'ResetSecret', newPassword: 'NewSecret' }), response());
@@ -131,7 +134,11 @@ test('office CRUD/activation snapshots and whitelist remain readable after hard 
 test('attendance manual edit bounds whitelisted diff and handles missing reason without rejection', async () => {
   const doc = { _id: oid(), clockIn: new Date('2026-11-03T01:00:00Z'), status: 'late', location: { lat: 10, lng: 20 }, save: jest.fn().mockResolvedValue() };
   jest.spyOn(Attendance, 'findById').mockResolvedValue(doc);
-  const res = response(); await attendance.updateAttendance(req({ status: 'present', password: 'secret', location: { lat: 11, lng: 21, address: 'huge'.repeat(10000) } }), res); await tick();
+  // Intentional hardening: unknown update fields now fail before mutation or audit writes.
+  const rejected = response();
+  await attendance.updateAttendance(req({ status: 'present', password: 'secret' }), rejected);
+  expect(rejected.statusCode).toBe(400); expect(rows).toEqual([]);
+  const res = response(); await attendance.updateAttendance(req({ status: 'present', location: { lat: 11, lng: 21 } }), res); await tick();
   expect(res.statusCode).toBe(200); expect(rows[0]).toMatchObject({ action: 'attendance.manual_updated', reason: null, metadata: { reasonMissing: true } });
   expect(rows[0].changes).toEqual([{ field: 'status', from: 'late', to: 'present' }, { field: 'location.lat', from: 10, to: 11 }, { field: 'location.lng', from: 20, to: 21 }]);
   expect(JSON.stringify(rows)).not.toMatch(/secret|huge/);

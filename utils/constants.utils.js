@@ -147,6 +147,10 @@ const constants = {
   };
   
 constants.AUDIT_ACTIONS = Object.freeze({
+  'auth.refreshed': { category: 'auth', severity: 'info' },
+  'auth.logged_out': { category: 'auth', severity: 'info' },
+  'auth.logged_out_all': { category: 'auth', severity: 'warning' },
+  'security.token_reuse_detected': { category: 'security', severity: 'critical' },
   'auth.register': { category: 'auth', severity: 'info' },
   'auth.login_success': { category: 'auth', severity: 'info' },
   'auth.login_failed': { category: 'auth', severity: 'warning' },

@@ -108,6 +108,8 @@ const TaskSchema = new mongoose.Schema({
 });
 
 TaskSchema.index({ assignedTo: 1, status: 1 });
+TaskSchema.index({ 'attachments.filename': 1 });
+TaskSchema.index({ 'pendingAttachmentDeletes.filename': 1 });
 TaskSchema.index({ teamId: 1, status: 1 });
 TaskSchema.index({ status: 1, dueDate: 1 });
 TaskSchema.index({ assignedTo: 1, status: 1, dueDate: 1 });

@@ -1,67 +1,13 @@
 const jwt = require('jsonwebtoken');
-
-const generateToken = (userId, additionalPayload = {}) => {
-    const payload = {
-        id: userId,
-        ...additionalPayload
-    };
-
-    const token = jwt.sign(
-        payload,
-        process.env.JWT_SECRET,
-        {
-            expiresIn: process.env.JWT_EXPIRE || '7d'
-        }
-    );
-
-    return token;
+const tokens = require('../services/token.service');
+const sessions = require('../services/session.service');
+const publicUser = user => {
+  const value = user.toObject ? user.toObject() : { ...user };
+  for (const key of ['password', 'resetPassword', 'tokenVersion', 'pushToken', 'reminders', 'leaveBalanceOperations']) delete value[key];
+  return value;
 };
-
-const verifyToken = (token) => {
-    try {
-        const decoded = jwt.verify(token, process.env.JWT_SECRET);
-        return decoded;
-    } catch (error) {
-        if (error.name === 'TokenExpiredError') {
-            throw new Error('Token has expired');
-        } else if (error.name === 'JsonWebTokenError') {
-            throw new Error('Invalid token');
-        } else {
-            throw new Error('Token verification failed');
-        }
-    }
+const sendTokenResponse = async (user, statusCode, res, req) => {
+  const pair = await sessions.createSession(user, req);
+  res.status(statusCode).json({ success: true, ...pair, user: publicUser(user) });
 };
-
-const sendTokenResponse = (user, statusCode, res) => {
-    const token = generateToken(user._id, {
-        email: user.email,
-        role: user.role
-    });
-
-    const userObj = user.toObject();
-    delete userObj.password;
-
-    res.status(statusCode).json({
-        success: true,
-        token,
-        user: userObj
-    });
-};
-
-const decodeToken = (token) => {
-    return jwt.decode(token);
-};
-
-module.exports = {
-    generateToken,
-    verifyToken,
-    sendTokenResponse,
-    decodeToken
-};
-
-
-
-
-
-
-
+module.exports = { verifyToken: tokens.verifyAccessToken, sendTokenResponse, publicUser, decodeToken: token => jwt.decode(token) };

@@ -27,7 +27,7 @@ async function main() {
     }));
     const team = await Team.create({ name: 'Review Team', leaderId: users[1]._id, memberIds: [users[0]._id, users[5]._id] });
     for (const user of users) { user.teamId = team._id; await user.save(); }
-    const tokens = users.map(user => require('../config/jwt').generateToken(user._id));
+    const tokens = await Promise.all(users.map(async user => (await require('../services/session.service').createSession(user)).token));
     const express = require('express'), app = express(); app.use(express.json());
     app.get('/api/auth/me', require('../middleware/auth.middleware').protect, (req, res) => res.json({ success: true, data: req.user }));
     app.use('/api/tasks', require('../routes/task.routes'));

@@ -16,7 +16,7 @@ test.each([
     [{ _id: lead, teamId: oid(), role: 'team_lead' }, {}, false],
     [{ _id: lead, teamId: team, role: 'team_lead', isActive: false }, {}, false],
     [{ _id: hr, role: 'hr_manager' }, {}, true],
-    [{ _id: requester, role: 'hr_manager' }, {}, false],
+    [{ _id: requester, role: 'hr_manager' }, {}, true],
     [{ _id: hr, role: 'system_admin' }, {}, false],
     [{ _id: hr, role: 'hr_manager' }, { status: 'approved' }, false],
     [{ _id: hr, role: 'hr_manager' }, { status: 'rejected' }, false],
@@ -40,13 +40,14 @@ test('snapshot uses Team.leaderId; inactive or missing leader skips to HR', asyn
     expect(result.status).toBe('pending_hr');
     expect(User.findOne).toHaveBeenCalledWith(expect.objectContaining({ _id: lead, isActive: true }));
 });
-test('Team Lead requester skips their own step and HR requester has only other HR', async () => {
+test('Team Lead requester skips their own step and HR requester can self-approve', async () => {
     jest.spyOn(User, 'find').mockReturnValue(query([{ _id: hr }]));
-    for (const role of ['team_lead', 'hr_manager']) {
-        const result = await resolveApproverSnapshot({ _id: requester, role, teamId: team });
-        expect(result.currentStep).toBe('hr');
-        expect(User.find).toHaveBeenLastCalledWith(expect.objectContaining({ _id: { $ne: requester } }));
-    }
+    const leadResult = await resolveApproverSnapshot({ _id: requester, role: 'team_lead', teamId: team });
+    expect(leadResult.currentStep).toBe('hr');
+    expect(User.find).toHaveBeenLastCalledWith(expect.objectContaining({ _id: { $ne: requester } }));
+    const hrResult = await resolveApproverSnapshot({ _id: requester, role: 'hr_manager', teamId: team });
+    expect(hrResult.currentStep).toBe('hr');
+    expect(User.find).toHaveBeenLastCalledWith({ role: 'hr_manager', isActive: true });
 });
 test('no HR and system admin submissions fail with a business conflict', async () => {
     jest.spyOn(User, 'find').mockReturnValue(query([]));

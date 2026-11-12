@@ -24,12 +24,14 @@ const estimateRules = () => [
 const createTaskValidation = [
   ...tagRules(), ...estimateRules(),
   body('title')
+    .isString().withMessage('Must be a string').bail()
     .trim()
     .notEmpty().withMessage('Task title is required')
     .isLength({ min: 3, max: 255 }).withMessage('Title must be between 3 and 255 characters'),
 
   body('description')
     .optional()
+    .isString().withMessage('Must be a string').bail()
     .trim()
     .isLength({ max: 5000 }).withMessage('Description must be at most 5000 characters'),
 
@@ -91,6 +93,7 @@ const createTaskValidation = [
 
   body('tags.*')
     .optional()
+    .isString().withMessage('Must be a string').bail()
     .trim()
     .isLength({ max: 50 }).withMessage('Each tag must be at most 50 characters')
 ];
@@ -115,11 +118,13 @@ const updateTaskValidation = [
 
   body('title')
     .optional()
+    .isString().withMessage('Must be a string').bail()
     .trim()
     .isLength({ min: 3, max: 255 }).withMessage('Title must be between 3 and 255 characters'),
 
   body('description')
     .optional()
+    .isString().withMessage('Must be a string').bail()
     .trim()
     .isLength({ max: 5000 }).withMessage('Description must be at most 5000 characters'),
 
@@ -212,6 +217,7 @@ const addCommentValidation = [
     }),
 
   body('text')
+    .isString().withMessage('Must be a string').bail()
     .trim()
     .notEmpty().withMessage('Comment text is required')
     .isLength({ min: 1, max: 2000 }).withMessage('Comment must be between 1 and 2000 characters')
@@ -230,6 +236,7 @@ const createSubtaskValidation = [
     }),
 
   body('title')
+    .isString().withMessage('Must be a string').bail()
     .trim()
     .notEmpty().withMessage('Subtask title is required')
     .isLength({ min: 1, max: 255 }).withMessage('Subtask title must be between 1 and 255 characters')
@@ -252,6 +259,7 @@ const updateSubtaskValidation = [
 
   body('title')
     .optional()
+    .isString().withMessage('Must be a string').bail()
     .trim()
     .isLength({ min: 1, max: 255 }).withMessage('Subtask title must be between 1 and 255 characters'),
 
@@ -310,10 +318,7 @@ const getTeamTasksValidation = [
       }
       return true;
     }),
-
-  query('status')
-    .optional()
-    .isIn(['todo', 'in_progress', 'in_review', 'done']).withMessage('Invalid status')
+  ...getTasksValidation
 ];
 
 /**

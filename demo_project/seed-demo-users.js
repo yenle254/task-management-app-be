@@ -25,6 +25,47 @@ const LEADS = [
     position: 'Team Lead',
     teamName: 'Nhóm Phát triển B',
   },
+  // ===== 5 leader bổ sung (@gmail.com) — teamIndex 2..6 =====
+  {
+    email: 'leader.minhquan@gmail.com',
+    fullName: 'Đỗ Minh Quân',
+    employeeId: 'LEAD003',
+    department: 'Phát triển phần mềm',
+    position: 'Team Lead',
+    teamName: 'Nhóm Mobile',
+  },
+  {
+    email: 'leader.thuha@gmail.com',
+    fullName: 'Vũ Thu Hà',
+    employeeId: 'LEAD004',
+    department: 'Kiểm thử phần mềm',
+    position: 'QA Lead',
+    teamName: 'Nhóm Kiểm thử',
+  },
+  {
+    email: 'leader.ducthang@gmail.com',
+    fullName: 'Bùi Đức Thắng',
+    employeeId: 'LEAD005',
+    department: 'Hạ tầng & DevOps',
+    position: 'DevOps Lead',
+    teamName: 'Nhóm DevOps',
+  },
+  {
+    email: 'leader.ngoclan@gmail.com',
+    fullName: 'Ngô Ngọc Lan',
+    employeeId: 'LEAD006',
+    department: 'Thiết kế sản phẩm',
+    position: 'Design Lead',
+    teamName: 'Nhóm Thiết kế UI/UX',
+  },
+  {
+    email: 'leader.hoanglong@gmail.com',
+    fullName: 'Đặng Hoàng Long',
+    employeeId: 'LEAD007',
+    department: 'Phân tích dữ liệu',
+    position: 'Data Lead',
+    teamName: 'Nhóm Dữ liệu',
+  },
 ];
 
 const MEMBERS = [
@@ -52,6 +93,27 @@ const MEMBERS = [
     position: 'QA Engineer',
     teamIndex: 1,
   },
+  // ===== 15 employee bổ sung (@gmail.com) — 3 người / team mới =====
+  // Nhóm Mobile (teamIndex 2)
+  { email: 'nv.thanhtung@gmail.com', fullName: 'Nguyễn Thanh Tùng', employeeId: 'EMP004', department: 'Phát triển phần mềm', position: 'Mobile Developer', teamIndex: 2 },
+  { email: 'nv.khanhlinh@gmail.com', fullName: 'Trần Khánh Linh', employeeId: 'EMP005', department: 'Phát triển phần mềm', position: 'Mobile Developer', teamIndex: 2 },
+  { email: 'nv.quochuy@gmail.com', fullName: 'Lý Quốc Huy', employeeId: 'EMP006', department: 'Phát triển phần mềm', position: 'Mobile Developer', teamIndex: 2 },
+  // Nhóm Kiểm thử (teamIndex 3)
+  { email: 'nv.maianh@gmail.com', fullName: 'Phan Mai Anh', employeeId: 'EMP007', department: 'Kiểm thử phần mềm', position: 'QA Engineer', teamIndex: 3 },
+  { email: 'nv.vanhieu@gmail.com', fullName: 'Hồ Văn Hiếu', employeeId: 'EMP008', department: 'Kiểm thử phần mềm', position: 'QA Engineer', teamIndex: 3 },
+  { email: 'nv.thuytrang@gmail.com', fullName: 'Đinh Thùy Trang', employeeId: 'EMP009', department: 'Kiểm thử phần mềm', position: 'Automation Tester', teamIndex: 3 },
+  // Nhóm DevOps (teamIndex 4)
+  { email: 'nv.ducanh@gmail.com', fullName: 'Trịnh Đức Anh', employeeId: 'EMP010', department: 'Hạ tầng & DevOps', position: 'DevOps Engineer', teamIndex: 4 },
+  { email: 'nv.minhtri@gmail.com', fullName: 'Cao Minh Trí', employeeId: 'EMP011', department: 'Hạ tầng & DevOps', position: 'System Engineer', teamIndex: 4 },
+  { email: 'nv.baongoc@gmail.com', fullName: 'Lâm Bảo Ngọc', employeeId: 'EMP012', department: 'Hạ tầng & DevOps', position: 'Cloud Engineer', teamIndex: 4 },
+  // Nhóm Thiết kế UI/UX (teamIndex 5)
+  { email: 'nv.phuongthao@gmail.com', fullName: 'Mai Phương Thảo', employeeId: 'EMP013', department: 'Thiết kế sản phẩm', position: 'UI Designer', teamIndex: 5 },
+  { email: 'nv.giabao@gmail.com', fullName: 'Tạ Gia Bảo', employeeId: 'EMP014', department: 'Thiết kế sản phẩm', position: 'UX Designer', teamIndex: 5 },
+  { email: 'nv.hongnhung@gmail.com', fullName: 'Dương Hồng Nhung', employeeId: 'EMP015', department: 'Thiết kế sản phẩm', position: 'UI Designer', teamIndex: 5 },
+  // Nhóm Dữ liệu (teamIndex 6)
+  { email: 'nv.tuankiet@gmail.com', fullName: 'Châu Tuấn Kiệt', employeeId: 'EMP016', department: 'Phân tích dữ liệu', position: 'Data Analyst', teamIndex: 6 },
+  { email: 'nv.myduyen@gmail.com', fullName: 'Kiều Mỹ Duyên', employeeId: 'EMP017', department: 'Phân tích dữ liệu', position: 'Data Engineer', teamIndex: 6 },
+  { email: 'nv.vietdung@gmail.com', fullName: 'Tôn Việt Dũng', employeeId: 'EMP018', department: 'Phân tích dữ liệu', position: 'Data Scientist', teamIndex: 6 },
 ];
 
 async function upsertUser(data, role, teamId, managerId) {

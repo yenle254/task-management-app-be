@@ -9,6 +9,18 @@ beforeEach(() => { insert = jest.spyOn(AuditLog, 'create').mockResolvedValue({})
 const req = () => ({ requestId: 'audit-request', ip: '127.0.0.1', method: 'PUT', baseUrl: '/api/users', route: { path: '/:id' },
   headers: { 'user-agent': 'test' }, user: { _id: oid(), role: 'hr_manager', email: 'hr@example.com', profile: { fullName: 'HR' } } });
 
+test('shutdown flush includes queued and in-flight audit writes', async () => {
+  let release;
+  insert.mockReturnValue(new Promise(resolve => { release = resolve; }));
+  audit.record(req(), { action: 'user.updated' });
+  let flushed = false;
+  const pending = audit.flush().then(() => { flushed = true; });
+  await tick(); expect(flushed).toBe(false);
+  expect(insert).toHaveBeenCalledTimes(1);
+  release({}); await pending;
+  expect(flushed).toBe(true);
+});
+
 test('failed DB write and synchronous insert failure never escape or create an unhandled rejection', async () => {
   const error = jest.spyOn(logger, 'error').mockImplementation(() => {});
   insert.mockRejectedValueOnce(new Error('database offline')).mockImplementationOnce(() => { throw new Error('sync failure'); });

@@ -21,6 +21,7 @@ const sendMessageValidation = [
 
   body('message')
     .optional()
+    .isString().withMessage('Must be a string').bail()
     .trim()
     .isLength({ max: 5000 }).withMessage('Message must be at most 5000 characters'),
 

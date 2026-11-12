@@ -119,13 +119,12 @@ async function main() {
             await request('employee', 'DELETE', `/${leave._id}`, {}, 400);
             assert.ok(cancelled.history.some(h => h.action === 'balance_refunded')); assert.equal(await Leave.countDocuments({ _id: leave._id }), 1);
         });
-        await check('HR override, self-approval denied, HR/TL own submission and admin blocked', async () => {
+        await check('HR override, TL self-approval denied, HR self-approval allowed and admin blocked', async () => {
             const leadLeave = await create('lead'); assert.equal(leadLeave.status, 'pending_hr');
             await request('lead', 'PUT', `/${leadLeave._id}/approve`, {}, 403);
             const hrLeave = await create('hr'); assert.equal(hrLeave.status, 'pending_hr');
-            await request('hr', 'PUT', `/${hrLeave._id}/approve`, {}, 403);
             await request('admin', 'PUT', `/${hrLeave._id}/approve`, {}, 403);
-            await request('hr2', 'PUT', `/${hrLeave._id}/approve`, {});
+            await request('hr', 'PUT', `/${hrLeave._id}/approve`, {});
             await request('admin', 'POST', '', data(), 409);
             const leave = await create();
             const rejected = (await request('hr', 'PUT', `/${leave._id}/reject`, {})).data;

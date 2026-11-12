@@ -1,5 +1,7 @@
 node_modules/
 .env
+.env.*
+!.env.example
 PERSON_1_CHECKLIST.md
 # .DS_Store
 # /uploads/*
@@ -8,8 +10,14 @@ PERSON_1_CHECKLIST.md
 # Documentation (generated locally)
 docs/
 *.md
+!report/production-runtime.md
+!report/health-shutdown.md
+!report/docker-production.md
+!report/github-actions-ci.md
+!report/production-deployment-plan.md
 *.txt
 prompt.txt
+
 # Test coverage reports (generated, not source code)
 coverage/
 

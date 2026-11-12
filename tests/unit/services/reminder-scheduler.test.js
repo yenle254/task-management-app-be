@@ -57,3 +57,15 @@ test('prune uses matching receipt timestamp; failed delivery retains claim', asy
   expect(notifications.createNotification).toHaveBeenCalledTimes(1);
 });
 test('start is disabled in tests and stop is safe', () => { scheduler.start({}); scheduler.stop(); expect(notifications.initDelivery).not.toHaveBeenCalled(); });
+
+test('stop waits for the active reminder run before database shutdown', async () => {
+  let release;
+  const pending = new Promise(resolve => { release = resolve; });
+  Office.findOne.mockReturnValue({ select: () => ({ lean: () => pending }) });
+  const run = scheduler.tick(monday());
+  let stopped = false;
+  const stopping = scheduler.stop().then(() => { stopped = true; });
+  await Promise.resolve(); expect(stopped).toBe(false);
+  release(null); await Promise.all([run, stopping]);
+  expect(stopped).toBe(true);
+});

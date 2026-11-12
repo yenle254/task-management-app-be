@@ -114,7 +114,8 @@ describe('requestLogger middleware', () => {
       method: 'GET',
       path: '/search',
       requestId: 'r-q',
-      url: '/search?password=secret&token=abc',
+      url: '/search?password=secret&token=abc&access_token=private-preview-secret',
+      originalUrl: '/search?access_token=private-preview-secret',
     };
     const res = new EventEmitter();
     res.statusCode = 200;
@@ -128,6 +129,7 @@ describe('requestLogger middleware', () => {
     expect(entry.route).not.toContain('password');
     expect(entry.route).not.toContain('secret');
     expect(entry.route).not.toContain('token');
+    expect(JSON.stringify(entries)).not.toContain('private-preview-secret');
   });
 
   test('normalizeRoute uses req.route.path + baseUrl when available', () => {

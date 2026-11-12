@@ -9,6 +9,8 @@ const { preferences } = require('../utils/notification-preferences.helper');
 const { dayKey, shouldFire, dayRange } = require('../utils/reminder.helper');
 const DAY = 86400000;
 let timer, running = false, warnedOffice = false;
+let activeRun = Promise.resolve();
+let enabled = false;
 
 async function claimAndNotify(userId, key, now, type, title, message, relatedId = null) {
   const claimed = await User.findOneAndUpdate({ _id: userId, isActive: true, [`reminders.${key}`]: { $exists: false } },
@@ -20,7 +22,7 @@ async function claimAndNotify(userId, key, now, type, title, message, relatedId 
   return true;
 }
 
-async function tick(now = new Date()) {
+async function runTick(now) {
   if (running) return;
   running = true;
   try {
@@ -81,13 +83,27 @@ async function tick(now = new Date()) {
   } finally { running = false; }
 }
 
+function tick(now = new Date()) {
+  if (running) return activeRun;
+  activeRun = runTick(now);
+  return activeRun;
+}
+
 function start(io) {
   if (timer || process.env.NODE_ENV === 'test') return;
   notifications.initDelivery(io);
-  const run = () => tick().catch(error => console.warn('Reminder tick failed:', error.name));
+  enabled = true;
+  const run = () => {
+    if (enabled) void tick().catch(error => console.warn('Reminder tick failed:', error.name));
+  };
   timer = setInterval(run, 60000);
   timer.unref?.();
   run();
 }
-function stop() { clearInterval(timer); timer = null; }
+function stop() {
+  enabled = false;
+  clearInterval(timer);
+  timer = null;
+  return activeRun.catch(() => {});
+}
 module.exports = { start, stop, tick, claimAndNotify };

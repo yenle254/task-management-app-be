@@ -85,13 +85,19 @@ const UserSchema = new mongoose.Schema(
       leaveId: mongoose.Schema.Types.ObjectId, year: Number, days: Number,
       state: { type: String, enum: ['deducted', 'refunded'] }
     }, { _id: false }), default: {}, select: false },
-    resetPassword: { type: ResetPasswordSchema, default: {} },
+    tokenVersion: { type: Number, default: 0, select: false, min: 0 },
+    resetPassword: { type: ResetPasswordSchema, default: {}, select: false },
   },
   {
     timestamps: true,
     collection: "users"
   }
 );
+
+UserSchema.set('toJSON', { transform: (_doc, value) => {
+  for (const key of ['password', 'resetPassword', 'tokenVersion', 'pushToken', 'reminders', 'leaveBalanceOperations']) delete value[key];
+  return value;
+} });
 
 UserSchema.index({ role: 1, isActive: 1 });
 UserSchema.index({ role: 1, teamId: 1 });

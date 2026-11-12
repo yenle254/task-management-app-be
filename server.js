@@ -1,9 +1,20 @@
+let runtime;
+try {
+  runtime = require('./config/runtime.config').loadRuntimeConfig();
+} catch (error) {
+  console.error(`Startup configuration invalid: ${error.message}`);
+  process.exit(1);
+}
+
 const express = require("express");
 const http = require("http");
 const { Server } = require("socket.io");
-const dotenv = require("dotenv");
 const cors = require("cors");
 const connectDB = require("./config/database");
+const mongoose = require('mongoose');
+const { createHealthService } = require('./services/health.service');
+const { createHealthRouter } = require('./routes/health.routes');
+const { createServerLifecycle } = require('./services/server-lifecycle.service');
 const errorHandler = require("./middleware/error-handler.middleware");
 const { generalLimiter } = require("./middleware/rate-limit.middleware");
 const requestId = require("./middleware/request-id.middleware");
@@ -11,35 +22,39 @@ const requestLogger = require("./middleware/request-logger.middleware");
 const sanitizeServerError = require("./middleware/sanitize-server-error.middleware");
 const logger = require("./utils/logger.utils");
 
-dotenv.config();
-const path = require("path");
+const { httpCorsOptions, socketCorsOptions, allowSocketRequest } = runtime.cors;
+const { securityHeaders, permissionsPolicy } = require('./config/security.config');
+const sanitizeInput = require('./middleware/sanitize.middleware');
 const app = express();
+app.set('trust proxy', runtime.trustProxy);
 const server = http.createServer(app);
 
-const io = new Server(server, {
-  cors: {
-    origin: process.env.CLIENT_URL || "*",
-    methods: ["GET", "POST"],
-    credentials: true,
-  },
-});
+const io = new Server(server, { cors: socketCorsOptions, allowRequest: allowSocketRequest });
 
-const databaseReady = connectDB();
+const health = createHealthService({ connection: mongoose.connection, timeoutMs: runtime.healthcheckTimeoutMs });
 
 // Request ID must be registered before any other middleware so all requests
 // (including 404s, parser errors, and global error handler) have a requestId.
 app.use(requestId);
+// Public probes precede auth, business rate limits, CORS and 5xx sanitization.
+app.use('/health', createHealthRouter(health));
 app.use(sanitizeServerError);
+app.use((_req, res, next) => {
+  if (health.isStopping()) {
+    res.set('Connection', 'close');
+    return res.status(503).json({ success: false, error: 'Service not ready' });
+  }
+  next();
+});
 
-app.use(
-  cors({
-    origin: process.env.CLIENT_URL || "*",
-    credentials: true,
-  })
-);
-
+app.use(requestLogger);
+app.use(securityHeaders());
+app.use(permissionsPolicy);
+app.use(cors(httpCorsOptions));
+app.set('query parser', 'simple'); // Never interpret bracketed input as Mongo operators.
 app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
+app.use(express.urlencoded({ extended: false }));
+app.use(sanitizeInput);
 app.set("io", io);
 
 if (process.env.NODE_ENV === "development") {
@@ -85,6 +100,7 @@ const statisticsRoutes = require("./routes/statistics.routes");
 const officeRoutes = require("./routes/office.routes");
 const adminRoutes = require("./routes/admin.routes");
 const employeeRoutes = require("./routes/employee.routes");
+const aiRoutes = require("./chat_bot/routes/ai.routes");
 
 // Mount routes with general rate limiting (skip for /api/auth which uses strict limiter)
 app.use("/api/auth", authRoutes);
@@ -100,8 +116,11 @@ app.use("/api/offices", generalLimiter, officeRoutes);
 app.use("/api/statistics", generalLimiter, statisticsRoutes);
 app.use("/api/employees", generalLimiter, employeeRoutes);
 app.use("/api/admin", adminRoutes);
+app.use("/api/ai", generalLimiter, aiRoutes);
 const { setupSwagger } = require("./config/swagger.config");
-app.use("/uploads", express.static(path.join(__dirname, "uploads")));
+const fileRoutes = require('./routes/file.routes');
+app.use('/uploads', fileRoutes);
+app.use('/api/files', fileRoutes);
 setupSwagger(app);
 
 app.use((req, res, next) => {
@@ -111,27 +130,33 @@ app.use((req, res, next) => {
   });
 });
 
-// Request-completion logging must run before the global error handler
-// so that 404s, parser errors, and other failures are also captured.
-app.use(requestLogger);
 
 app.use(errorHandler);
 
 const socketHandler = require("./utils/socket-handler.utils");
-socketHandler(io);
+const stopSockets = socketHandler(io);
 const notificationService = require('./services/notification.service');
 const reminderScheduler = require('./services/reminder-scheduler.service');
 notificationService.initDelivery(io);
-databaseReady.then(() => reminderScheduler.start(io)).catch(error => {
-  logger.error('Reminder startup failed', { name: error.name });
+const lifecycle = createServerLifecycle({ server, io, health, stopSockets,
+  stopScheduler: () => reminderScheduler.stop(), disconnectDatabase: () => mongoose.disconnect(),
+  flushAudit: () => require('./services/audit.service').flush(),
+  timeoutMs: runtime.shutdownTimeoutMs, logger });
+connectDB().then(() => {
+  if (health.isStopping()) return;
+  reminderScheduler.start(io);
+  health.markStarted();
+}).catch(() => {
+  logger.error('Database startup failed');
+  void lifecycle.shutdown('database_startup_failed', 1);
 });
-server.on('close', () => reminderScheduler.stop());
-process.once('SIGINT', () => reminderScheduler.stop());
-process.once('SIGTERM', () => reminderScheduler.stop());
+server.on('error', () => {
+  logger.error('HTTP server failed');
+  void lifecycle.shutdown('http_server_error', 1);
+});
 
-const PORT = process.env.PORT;
-server.listen(PORT, () => {
-  logger.info("Server started", { port: PORT });
+server.listen(runtime.port, runtime.host, () => {
+  logger.info("Server started", { port: runtime.port, host: runtime.host });
   logger.info("Socket.IO is ready");
   logger.info("Environment", { env: process.env.NODE_ENV || "development" });
 });

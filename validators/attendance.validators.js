@@ -88,6 +88,17 @@ const getTeamAttendanceValidation = [
  * Validation chain for updating attendance
  */
 const updateAttendanceValidation = [
+  body().custom(value => {
+    if (!value || Array.isArray(value) || typeof value !== 'object') throw new Error('Invalid update');
+    const allowed = ['clockIn', 'clockOut', 'status', 'workHours', 'location', 'autoClockOut', 'reason'];
+    const rejected = Object.keys(value).filter(key => !allowed.includes(key));
+    if (rejected.length) throw new Error(`Unsupported fields: ${rejected.join(', ')}`);
+    return true;
+  }),
+  body('autoClockOut').optional().isBoolean({ strict: true }),
+  body('reason').optional().isString().bail().isLength({ max: 1000 }),
+  body('location').optional().custom(value => value && typeof value === 'object' && !Array.isArray(value) &&
+    Object.keys(value).every(key => ['lat', 'lng'].includes(key))),
   param('id')
     .custom((value) => {
       const mongoose = require('mongoose');

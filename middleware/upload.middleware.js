@@ -8,21 +8,13 @@ if (!fs.existsSync(uploadsDir)) {
   fs.mkdirSync(uploadsDir, { recursive: true });
 }
 
-const BLOCKED_EXTENSIONS = [
-  'exe', 'scr', 'com', 'bat', 'cmd', 'ps1', 'vbs', 'vbe', 'js', 'jse',
-  'wsf', 'wsh', 'msc', 'msp', 'mst', 'pif', 'application', 'gadget',
-  'hta', 'lnk', 'inf', 'reg', 'cpl', 'sh', 'bash', 'zsh', 'ksh', 'csh',
-  'apk', 'deb', 'rpm', 'app', 'run', 'command',
-  'dll', 'so', 'dylib', 'jar', 'class',
-  'docm', 'dotm', 'xlsm', 'xltm', 'xlam', 'pptm', 'potm', 'ppam', 'sldm',
-  'iso', 'img', 'dmg', 'msi', 'msp', 'msu', 'cab', 'swf', 'air'
-];
-
-const isExtensionBlocked = (filename) => {
-  if (!filename) return false;
-  const ext = filename.toLowerCase().split('.').pop();
-  return BLOCKED_EXTENSIONS.includes(ext);
-};
+const { allowedExtension, inspectFile } = require('../utils/file-signature.helper');
+const { hasUnsafeKeys } = require('./sanitize.middleware');
+const {
+  isCloudinaryEnabled,
+  uploadToCloudinary,
+  deleteFromCloudinary,
+} = require('../config/cloudinary.config');
 
 const storage = multer.diskStorage({
   destination: (req, file, cb) => {
@@ -31,13 +23,12 @@ const storage = multer.diskStorage({
   filename: (req, file, cb) => {
     const uniqueSuffix = `${Date.now()}-${Math.round(Math.random() * 1E9)}`;
     const ext = path.extname(file.originalname);
-    const name = path.basename(file.originalname, ext);
-    cb(null, `${req.user._id}-${uniqueSuffix}${ext}`);
+    cb(null, `${req.user._id}-${uniqueSuffix}${ext.toLowerCase()}`);
   }
 });
 
 const fileFilter = (req, file, cb) => {
-  if (isExtensionBlocked(file.originalname)) {
+  if (!allowedExtension(file.originalname)) {
     return cb(new Error(`Cannot upload file with extension ".${file.originalname.split('.').pop()}" due to security`), false);
   }
 
@@ -73,16 +64,53 @@ const upload = multer({
   },
 });
 
-const uploadSingle = upload.single('attachment');
-const uploadFile = upload.single('file'); // For general file upload
-const uploadMultiple = upload.array('attachments', FILE_UPLOAD.MAX_FILES);
+const verifiedUpload = middleware => (req, res, next) => {
+  middleware(req, res, async error => {
+    const files = req.files || (req.file ? [req.file] : []);
+    const uploadedToCloud = [];
+    try {
+      if (error) throw error;
+      if (hasUnsafeKeys(req.body)) throw new Error('Unsupported input keys');
+      for (const file of files) {
+        const detected = await inspectFile(file.path, file.originalname);
+        if (!detected) throw new Error('File content does not match its extension');
+        file.mimetype = detected;
+      }
+      if (isCloudinaryEnabled()) {
+        for (const file of files) {
+          try {
+            await uploadToCloudinary(file.path, file.filename);
+            uploadedToCloud.push(file.filename);
+            await fs.promises.unlink(file.path).catch(() => {});
+          } catch (cloudError) {
+            if (process.env.NODE_ENV !== 'production') {
+              console.warn(`[Cloudinary] Upload failed (${cloudError.message}). Kept file locally at uploads/${file.filename}`);
+            } else {
+              throw cloudError;
+            }
+          }
+        }
+      }
+      next();
+    } catch (failure) {
+      await Promise.all([
+        ...files.map(file => fs.promises.unlink(file.path).catch(() => {})),
+        ...uploadedToCloud.map(filename => deleteFromCloudinary(filename).catch(() => {})),
+      ]);
+      next(failure);
+    }
+  });
+};
+const uploadSingle = verifiedUpload(upload.single('attachment'));
+const uploadFile = verifiedUpload(upload.single('file'));
+const uploadMultiple = verifiedUpload(upload.array('attachments', FILE_UPLOAD.MAX_FILES));
 
 const uploadErrorHandler = (err, req, res, next) => {
   if (err instanceof multer.MulterError) {
     if (err.code === 'LIMIT_FILE_SIZE') {
       return res.status(400).json({ success: false, error: 'File too large. File under 10MB is allowed' });
     }
-    if (err.code === 'LIMIT_FILE_COUNT') {
+    if (err.code === 'LIMIT_FILE_COUNT' || (err.code === 'LIMIT_UNEXPECTED_FILE' && err.field === 'attachments')) {
       return res.status(400).json({ success: false, error: 'Maximum 5 files when uploading' });
     }
   }
@@ -112,13 +140,18 @@ const getFileUrl = (filename, req = null) => {
 
 const deleteFile = async (filename, { throwOnError = false } = {}) => {
   try {
-    if (!filename) return false;
+    if (!filename || path.basename(filename) !== filename || filename.includes('..') || filename.includes('\\')) return false;
+    let deleted = false;
     const filePath = path.join(uploadsDir, filename);
     if (fs.existsSync(filePath)) {
       fs.unlinkSync(filePath);
-      return true;
+      deleted = true;
     }
-    return false;
+    if (isCloudinaryEnabled()) {
+      const cloudDeleted = await deleteFromCloudinary(filename);
+      deleted = deleted || cloudDeleted;
+    }
+    return deleted;
   } catch (error) {
     console.error('Delete file error:', error);
     if (throwOnError) throw error;

@@ -22,34 +22,8 @@ const setupSwagger = (app) => {
     res.status(200).send(swaggerSpec);
   });
 
-  try {
-    const swaggerUi = require('swagger-ui-express');
-    app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerSpec));
-  } catch (_error) {
-    app.get('/api-docs', (req, res) => {
-      res.setHeader('Content-Type', 'text/html');
-      res.status(200).send(`<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8" />
-  <title>HR Task Management API Documentation</title>
-  <link rel="stylesheet" href="https://unpkg.com/swagger-ui-dist@5/swagger-ui.css" />
-</head>
-<body>
-  <div id="swagger-ui"></div>
-  <script src="https://unpkg.com/swagger-ui-dist@5/swagger-ui-bundle.js"></script>
-  <script>
-    window.onload = function () {
-      SwaggerUIBundle({ url: '/api-docs.json', dom_id: '#swagger-ui' });
-    };
-  </script>
-</body>
-</html>`);
-    });
-  }
+  const swaggerUi = require('swagger-ui-express');
+  app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerSpec));
 };
 
-module.exports = {
-  swaggerSpec,
-  setupSwagger
-};
+module.exports = { swaggerSpec, setupSwagger };
