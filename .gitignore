@@ -8,6 +8,7 @@ PERSON_1_CHECKLIST.md
 # !/uploads/.gitkeep
 
 # Documentation (generated locally)
+
 docs/
 *.md
 !report/production-runtime.md
@@ -17,6 +18,12 @@ docs/
 !report/production-deployment-plan.md
 *.txt
 prompt.txt
+
+#tai lieu
+report/
+
+#du lieu demo
+demo_project/
 
 # Test coverage reports (generated, not source code)
 coverage/
