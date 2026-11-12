@@ -3,9 +3,12 @@ const fixture = require('../../fixtures/auth-session.fixture');
 const handler = require('../../../utils/socket-handler.utils');
 const sessions = require('../../../services/session.service');
 const jwt = require('jsonwebtoken');
+const audit = require('../../../services/audit.service');
 let db, authenticate, connection, stop, io;
 beforeEach(() => {
   db = fixture();
+  // Persistence is mocked in this suite, including deferred refresh audit writes.
+  jest.spyOn(audit, 'record').mockImplementation(() => {});
   io = { httpServer: new EventEmitter(), use(fn) { authenticate = fn; }, on(event, fn) { if (event === 'connection') connection = fn; },
     to: jest.fn().mockReturnThis(), in: jest.fn().mockReturnThis(), emit: jest.fn(), disconnectSockets: jest.fn(), fetchSockets: jest.fn(async () => []) };
   stop = handler(io);

@@ -40,6 +40,8 @@ afterAll(async () => {
   await fs.unlink(path.join(directory, htmlName));
 });
 beforeEach(() => {
+  // These fixtures use legacy tokens issued within the bounded rollout window.
+  jest.spyOn(Date, 'now').mockReturnValue(Date.parse('2026-11-07T12:00:00Z'));
   actor = { _id: owner, role: 'employee', isActive: true };
   tasks = [{ assignedBy: owner, assignedTo: [], status: 'todo', attachments: [{ filename, name: 'Original image.png' }], teamId: team }];
   messages = []; conversation = null;

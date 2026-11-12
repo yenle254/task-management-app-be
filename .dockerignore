@@ -1,0 +1,33 @@
+# Default deny: only runtime JavaScript and dependency manifests enter the context.
+**
+!package.json
+!package-lock.json
+!server.js
+!config/**/*.js
+!controllers/**/*.js
+!middleware/**/*.js
+!models/**/*.js
+!routes/**/*.js
+!services/**/*.js
+!utils/**/*.js
+!validators/**/*.js
+!chat_bot/**/*.js
+!scripts/check-config.js
+!scripts/docker-healthcheck.js
+
+# Explicitly deny sensitive/local content, including inside allowed source trees.
+**/.env*
+**/.*
+**/node_modules/**
+**/tests/**
+**/coverage/**
+**/report/**
+**/uploads/**
+**/*.log
+**/*.pem
+**/*.key
+**/*.p12
+**/*.pfx
+**/*.jks
+**/credentials*
+**/*firebase-adminsdk*

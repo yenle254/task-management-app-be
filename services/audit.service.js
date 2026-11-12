@@ -5,6 +5,7 @@ const { AUDIT_ACTIONS } = require('../utils/constants.utils');
 const { redactMeta, isSensitiveKey } = require('../utils/redact.utils');
 const { FIELDS, snapshot, diff } = require('../utils/audit-field.helper');
 const { normalizeRoute } = require('../middleware/request-logger.middleware');
+const pendingWrites = new Set();
 
 const text = (value, max = 500) => typeof value === 'string' ? value.trim().slice(0, max) : null;
 const objectId = value => mongoose.isObjectIdOrHexString(value?._id || value) ? String(value?._id || value) : null;
@@ -57,11 +58,11 @@ function record(req = {}, event = {}) {
       changes, reason: text(event.reason, event.action === 'task.review_rejected' ? 1000 : 500), metadata: bounded(redactMeta(event.metadata)), context: context(req) };
     // No mutable request/document is retained by the deferred insert or its catch.
     const failureMeta = { action: doc.action, requestId: doc.context.requestId };
-    setImmediate(() => {
-      Promise.resolve().then(() => AuditLog.create(doc)).catch(() => {
-        try { logger.error('audit_write_failed', failureMeta); } catch (_) { /* no unhandled rejection */ }
-      });
+    const write = new Promise(resolve => setImmediate(resolve)).then(() => AuditLog.create(doc)).catch(() => {
+      try { logger.error('audit_write_failed', failureMeta); } catch (_) { /* no unhandled rejection */ }
     });
+    pendingWrites.add(write);
+    void write.then(() => pendingWrites.delete(write));
   } catch (_) { failure(); }
 }
 function recordSystem(event) { record({ user: { role: 'system' } }, event); }
@@ -87,6 +88,7 @@ async function list(filters = {}, fixedTarget) {
   return { success: true, data, count: data.length, total, page, pages: Math.ceil(total / limit) };
 }
 module.exports = { record, recordSystem, diff, snapshot, FIELDS, target, changed, context, maskEmail, bounded, text, list,
+  flush: () => Promise.allSettled([...pendingWrites]),
   getById: id => AuditLog.findById(id).lean(),
   // Deployment declaration only; never trust an arbitrary forwarded header or change Express globally.
   trustProxyDeclaration: () => process.env.AUDIT_TRUST_PROXY || 'false' };

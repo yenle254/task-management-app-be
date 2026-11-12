@@ -9,6 +9,8 @@ let users, conversation, io, connected, authenticate, socket, handlers, stop;
 const token = (id = a, options = {}) => jwt.sign({ id }, process.env.JWT_SECRET, { expiresIn: '1h', ...options });
 
 beforeEach(async () => {
+  // Keep legacy-token fixtures inside their rollout window regardless of run date.
+  jest.spyOn(Date, 'now').mockReturnValue(Date.parse('2026-11-07T12:00:00Z'));
   users = new Map([a, b, c].map(id => [id, { _id: id, isActive: true, role: 'employee', profile: { fullName: 'Person' } }]));
   conversation = { _id: convId, participants: [a, b], unreadCount: new Map(), save: jest.fn().mockResolvedValue() };
   jest.spyOn(User, 'findById').mockImplementation(id => ({ select: async () => users.get(String(id)) }));
@@ -29,6 +31,23 @@ beforeEach(async () => {
   connected(socket);
 });
 afterEach(() => { handlers.get('disconnect')?.(); stop(); });
+
+test('stop drains an accepted socket event and rejects new authentication/work', async () => {
+  let release;
+  const pending = new Promise(resolve => { release = resolve; });
+  Conversation.findById.mockReturnValue(pending);
+  const event = handlers.get('join_conversation')(convId);
+  let stopped = false;
+  const stopping = stop().then(() => { stopped = true; });
+  await Promise.resolve(); expect(stopped).toBe(false);
+  const next = jest.fn(); await authenticate({ handshake: { auth: { token: token() } } }, next);
+  expect(next).toHaveBeenCalledWith(expect.any(Error));
+  release(conversation); await Promise.all([event, stopping]);
+  expect(stopped).toBe(true);
+  socket.join.mockClear();
+  await handlers.get('join_conversation')(convId);
+  expect(socket.join).not.toHaveBeenCalled();
+});
 
 test.each(['missing', 'invalid', 'expired', 'inactive', 'unknown'])('handshake rejects %s credentials', async kind => {
   const candidate = { handshake: { auth: {} }, data: {} };
@@ -144,7 +163,7 @@ test.each(['updateUser', 'deleteUser'])('%s controller immediately disconnects a
 test('real Socket.IO transport: two authenticated users exchange a message and revoke an idle session', async () => {
   const http = require('http');
   const { Server } = require('socket.io');
-  const { io: client } = require('../../../../project/node_modules/socket.io-client');
+  const { io: client } = require('socket.io-client');
   const server = http.createServer();
   const real = new Server(server);
   const stopReal = handler(real);

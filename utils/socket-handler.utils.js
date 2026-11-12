@@ -58,9 +58,18 @@ async function revalidateSessions(io) {
 
 const socketHandler = io => {
   const budgets = new Map();
-  io.use(async (socket, next) => {
+  const pending = new Set();
+  let stopped = false;
+  const track = callback => (...args) => {
+    if (stopped) return Promise.resolve();
+    const work = Promise.resolve().then(() => callback(...args));
+    pending.add(work);
+    return work.finally(() => pending.delete(work));
+  };
+  const authenticate = track(async (socket, next) => {
     try {
       const identity = await resolveSocketUser(socket.handshake.auth?.token);
+      if (stopped) throw new Error('Server shutting down');
       socket.user = identity.user;
       socket.data = { ...socket.data, userId: String(identity.user._id), role: identity.user.role,
         expiresAt: identity.expiresAt, ver: identity.decoded.ver ?? 0, sid: identity.decoded.sid };
@@ -71,20 +80,26 @@ const socketHandler = io => {
       next(denied);
     }
   });
+  io.use((socket, next) => stopped ? next(new Error('Server shutting down')) : authenticate(socket, next));
   // Batch checks include idle sockets; 30s leaves headroom for scheduling/DB latency.
   let checking = false;
-  const timer = setInterval(async () => {
+  const timer = setInterval(track(async () => {
     if (checking) return;
     checking = true;
     try { await revalidateSessions(io); }
     catch { logger.error('Socket session revalidation failed'); }
     finally { checking = false; }
-  }, 30000);
+  }), 30000);
   timer.unref();
-  const stop = () => clearInterval(timer);
+  const stop = () => {
+    stopped = true;
+    clearInterval(timer);
+    return Promise.allSettled([...pending]);
+  };
   io.httpServer?.once('close', stop);
 
   io.on('connection', socket => {
+    if (stopped) { socket.disconnect(true); return; }
     const userId = socket.data.userId;
     if (!onlineUsers.has(userId)) onlineUsers.set(userId, new Set());
     onlineUsers.get(userId).add(socket.id);
@@ -93,7 +108,7 @@ const socketHandler = io => {
     socket.broadcast.emit('user_online', { userId });
     socket.emit('online_users', [...onlineUsers.keys()]);
 
-    const handle = (event, callback) => socket.on(event, async data => {
+    const handle = (event, callback) => socket.on(event, track(async data => {
       try {
         const now = Date.now();
         let budget = budgets.get(userId);
@@ -114,7 +129,7 @@ const socketHandler = io => {
         if (event === 'send_message') socket.emit('message_error', { tempId: data?.tempId, error: message });
         if (!error.public) logger.error('Socket event failed', { event, userId });
       }
-    });
+    }));
     handle('join_conversation', async id => {
       await requireParticipant(id, userId);
       await socket.join(`conversation_${id}`);
@@ -185,7 +200,7 @@ const socketHandler = io => {
   }, 60000);
   budgetCleanup.unref();
   io.httpServer?.once('close', () => clearInterval(budgetCleanup));
-  return () => { stop(); clearInterval(budgetCleanup); };
+  return () => { clearInterval(budgetCleanup); return stop(); };
 };
 module.exports = socketHandler;
 module.exports.isUserOnline = userId => Boolean(onlineUsers.get(String(userId))?.size);

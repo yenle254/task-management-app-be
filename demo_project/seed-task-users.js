@@ -667,6 +667,9 @@ async function seed() {
   console.log(`Notifications: ${notifications.length}`);
   console.log(`Office active: "${office.name}" (radius ${office.radius}m, ${office.workingHours.start}-${office.workingHours.end})`);
   console.log('Chạy lại script sẽ tự dọn dữ liệu demo và tạo mới (idempotent).');
+
+  // Dữ liệu giả lập cho 5 team / 20 tài khoản @gmail.com
+  await require('./seed-gmail-users-data').seedGmailData();
   await mongoose.disconnect();
 }
 

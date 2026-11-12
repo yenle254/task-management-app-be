@@ -29,14 +29,27 @@ test('wrong secret, malformed token, expired token rejected with safe codes', ()
   try { tokens.verifyAccessToken(sign(raw({ iat: 1, exp: 2 }))); } catch (error) { expect(error.code).toBe('token_expired'); }
 });
 test('bounded legacy tokens remain valid but cannot bypass a malformed modern claim', () => {
-  const iat = Math.floor(Date.now() / 1000);
-  const old = sign({ id: user._id, email: user.email, role: user.role, iat, exp: iat + 3600 });
-  expect(tokens.verifyAccessToken(old)).toMatchObject({ sub: user._id, ver: 0, legacy: true });
-  expect(() => tokens.verifyAccessToken(sign({ id: user._id, typ: 'refresh', iat, exp: iat + 3600 }))).toThrow();
-  const previous = process.env.ACCEPT_LEGACY_TOKENS;
-  process.env.ACCEPT_LEGACY_TOKENS = 'false';
-  try { expect(() => tokens.verifyAccessToken(old)).toThrow(); }
-  finally { if (previous === undefined) delete process.env.ACCEPT_LEGACY_TOKENS; else process.env.ACCEPT_LEGACY_TOKENS = previous; }
+  // Exercise the rollout window deterministically, even after its real-world cutoff.
+  jest.spyOn(Date, 'now').mockReturnValue(Date.parse('2026-11-07T12:00:00Z'));
+  const previousAccept = process.env.ACCEPT_LEGACY_TOKENS;
+  const previousCutoff = process.env.LEGACY_TOKEN_ISSUED_BEFORE;
+  process.env.ACCEPT_LEGACY_TOKENS = 'true';
+  process.env.LEGACY_TOKEN_ISSUED_BEFORE = '2026-11-07T23:59:59Z';
+  try {
+    const iat = Math.floor(Date.now() / 1000);
+    const old = sign({ id: user._id, email: user.email, role: user.role, iat, exp: iat + 3600 });
+    expect(tokens.verifyAccessToken(old)).toMatchObject({ sub: user._id, ver: 0, legacy: true });
+    expect(() => tokens.verifyAccessToken(sign({ id: user._id, typ: 'refresh', iat, exp: iat + 3600 }))).toThrow();
+    process.env.ACCEPT_LEGACY_TOKENS = 'false';
+    expect(() => tokens.verifyAccessToken(old)).toThrow();
+    process.env.ACCEPT_LEGACY_TOKENS = 'true';
+    const afterCutoff = Date.parse('2026-11-08T12:00:00Z') / 1000;
+    Date.now.mockReturnValue(afterCutoff * 1000);
+    expect(() => tokens.verifyAccessToken(sign({ id: user._id, iat: afterCutoff, exp: afterCutoff + 3600 }))).toThrow();
+  } finally {
+    if (previousAccept === undefined) delete process.env.ACCEPT_LEGACY_TOKENS; else process.env.ACCEPT_LEGACY_TOKENS = previousAccept;
+    if (previousCutoff === undefined) delete process.env.LEGACY_TOKEN_ISSUED_BEFORE; else process.env.LEGACY_TOKEN_ISSUED_BEFORE = previousCutoff;
+  }
 });
 test('configuration fails fast for weak secret and unsafe TTL', () => {
   expect(() => tokens.validateTokenConfig({ JWT_SECRET: 'short' })).toThrow(/32 bytes/);

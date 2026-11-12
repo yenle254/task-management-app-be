@@ -28,6 +28,7 @@ test('register still creates employee and issues pair while ignoring injected ro
   expect(res.body.user).not.toHaveProperty('password');
 });
 test('legacy session works at epoch zero and is denied after logout-all', async () => {
+  jest.spyOn(Date, 'now').mockReturnValue(Date.parse('2026-11-07T12:00:00Z'));
   const token = jwt.sign({ id: db.user._id }, process.env.JWT_SECRET, { expiresIn: '1h' });
   expect((await get(token)).status).toBe(200);
   expect((await request(app).post('/api/auth/logout-all').set('Authorization', `Bearer ${token}`)).status).toBe(200);

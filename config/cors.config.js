@@ -31,4 +31,4 @@ function createCorsPolicy(env = process.env) {
   };
 }
 
-module.exports = { createCorsPolicy, ...createCorsPolicy() };
+module.exports = { createCorsPolicy };
