@@ -1,12 +1,14 @@
 const Task = require('../models/task.model');
-const { canUserAccessTask, enrichTask, enrichTasks } = require('../services/task.service');
+const { canUserAccessTask, canUserViewTask, enrichTask, enrichTasks } = require('../services/task.service');
 const service = require('../services/task-advanced.service');
 const { parseDate } = require('../utils/dashboard.helper');
 
 const loadTask = async (req) => {
   const task = service.assertTaskNotDeleted(await Task.findById(req.params.id));
-  if (!canUserAccessTask(req.user, task) && !await require('../services/task-review.service').canDecide(req.user, task)) throw service.fail('Not authorized', 403);
-  if (!['GET', 'HEAD'].includes(req.method)) require('../services/task-review.service').assertNotInReview(task);
+  const isRead = ['GET', 'HEAD'].includes(req.method);
+  const allowed = isRead ? canUserViewTask(req.user, task) : canUserAccessTask(req.user, task);
+  if (!allowed && !await require('../services/task-review.service').canDecide(req.user, task)) throw service.fail('Not authorized', 403);
+  if (!isRead) require('../services/task-review.service').assertNotInReview(task);
   return task;
 };
 const saveTask = async (task, user) => {
@@ -47,7 +49,7 @@ exports.removeParentTask = withTask(async (req, res, task) => {
 });
 exports.getTaskChildren = withTask(async (req, res, task) => {
   const children = await service.getTaskChildren(task._id).populate('assignedTo assignedBy', service.USER_FIELDS);
-  const data = enrichTasks(children.filter(child => canUserAccessTask(req.user, child)));
+  const data = enrichTasks(children.filter(child => canUserViewTask(req.user, child)));
   res.json({ success: true, count: data.length, data });
 });
 exports.addChecklist = withTask(async (req, res, task) => {
@@ -82,7 +84,7 @@ exports.removeDependency = withTask(async (req, res, task) => {
 });
 exports.getDependencies = withTask(async (req, res, task) => {
   const dependencies = await Task.find({ _id: { $in: task.dependencies }, status: { $ne: 'deleted' } }).lean();
-  const visible = dependencies.filter(item => canUserAccessTask(req.user, item)).map(({ _id, title, status }) => ({ _id, title, status }));
+  const visible = dependencies.filter(item => canUserViewTask(req.user, item)).map(({ _id, title, status }) => ({ _id, title, status }));
   res.json({ success: true, count: visible.length, data: { blocking: visible.filter(item => item.status !== 'done'), blockedBy: visible } });
 });
 exports.addWatcher = withTask(async (req, res, task) => {
@@ -102,7 +104,7 @@ exports.getWatchers = withTask(async (req, res, task) => {
 exports.getWatchingTasks = async (req, res) => {
   const tasks = await Task.find({ watchers: req.user._id, status: { $ne: 'deleted' } })
     .populate('assignedTo assignedBy', service.USER_FIELDS).lean();
-  const data = enrichTasks(tasks.filter(task => canUserAccessTask(req.user, task)));
+  const data = enrichTasks(tasks.filter(task => canUserViewTask(req.user, task)));
   res.json({ success: true, count: data.length, data });
 };
 exports.setTags = withTask(async (req, res, task) => {

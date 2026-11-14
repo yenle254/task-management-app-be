@@ -94,6 +94,18 @@ const canUserAccessTask = (user, task) => {
 };
 
 /**
+ * Check if user can view a task (includes read-only access for employees in the same team)
+ * @param {Object} user - Current authenticated user
+ * @param {Object} task - Task document
+ * @returns {Boolean}
+ */
+const canUserViewTask = (user, task) => {
+  if (canUserAccessTask(user, task)) return true;
+  return user.role === 'employee' &&
+    Boolean(user.teamId && task.teamId && idOf(user.teamId) === idOf(task.teamId));
+};
+
+/**
  * Check if user can create or assign tasks
  * @param {Object} user - Current user
  * @returns {Boolean}
@@ -181,6 +193,7 @@ module.exports = {
   checkIfOverdue,
   getTaskStats,
   canUserAccessTask,
+  canUserViewTask,
   canCreateOrAssignTask,
   canUpdateTaskStatus,
   validateTaskData,

@@ -18,6 +18,7 @@ const Team = require('../models/team.model');
 const User = require('../models/user.model');
 const {
   canUserAccessTask,
+  canUserViewTask,
   canCreateOrAssignTask,
   canUpdateTaskStatus,
   validateTaskData,
@@ -228,7 +229,7 @@ const getTaskById = async (req, res) => {
         error: 'Task not found'
       });
     }
-    if (!canUserAccessTask(req.user, task)) {
+    if (!canUserViewTask(req.user, task)) {
       return res.status(403).json({
         success: false,
         error: 'Not authorized to view this task'
@@ -1195,7 +1196,7 @@ const getSubtasks = async (req, res) => {
       });
     }
 
-    if (!canUserAccessTask(req.user, task)) {
+    if (!canUserViewTask(req.user, task)) {
       return res.status(403).json({ 
         success: false, 
         error: 'Not authorized to view this task' 

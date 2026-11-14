@@ -2,7 +2,7 @@ const Task = require('../models/task.model');
 const Message = require('../models/message.model');
 const Conversation = require('../models/conversation.model');
 const User = require('../models/user.model');
-const { canUserAccessTask } = require('./task.service');
+const { canUserViewTask } = require('./task.service');
 const validFilename = filename => typeof filename === 'string' && /^[a-zA-Z0-9][a-zA-Z0-9._-]*$/.test(filename) && !filename.includes('..');
 
 async function resolveFileAccess(filename, user) {
@@ -11,7 +11,7 @@ async function resolveFileAccess(filename, user) {
     .populate('teamId', 'leaderId').lean();
   if (tasks.length) {
     const task = tasks.find(task => task.status !== 'deleted' &&
-      task.attachments?.some(item => item.filename === filename) && canUserAccessTask(user, task));
+      task.attachments?.some(item => item.filename === filename) && canUserViewTask(user, task));
     return task ? { name: task.attachments.find(item => item.filename === filename).name || filename } : null;
   }
   // General uploads are also used by chat: authorize recipients through their conversation.
