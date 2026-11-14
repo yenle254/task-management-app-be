@@ -1,6 +1,7 @@
 const Task = require('../models/task.model');
 const Message = require('../models/message.model');
 const Conversation = require('../models/conversation.model');
+const User = require('../models/user.model');
 const { canUserAccessTask } = require('./task.service');
 const validFilename = filename => typeof filename === 'string' && /^[a-zA-Z0-9][a-zA-Z0-9._-]*$/.test(filename) && !filename.includes('..');
 
@@ -22,6 +23,16 @@ async function resolveFileAccess(filename, user) {
     return conversation ? { name: filename } : null;
   }
   const ownerId = filename.split('-')[0];
+  // Profile photos are visible to signed-in colleagues. Only an image owned by
+  // the profile owner can become an avatar; task/chat ACLs above retain priority.
+  if (/^[a-f0-9]{24}$/i.test(ownerId) && /\.(jpe?g|png|gif|webp)$/i.test(filename)) {
+    const profile = await User.findOne({
+      _id: ownerId,
+      isActive: true,
+      'profile.avatar': { $regex: `/(uploads|api/files)/${escaped}$` },
+    }).select('_id').lean();
+    if (profile) return { name: filename };
+  }
   return (ownerId === String(user._id) || user.role === 'hr_manager') ? { name: filename } : null;
 }
 

@@ -46,12 +46,54 @@ beforeEach(() => {
   tasks = [{ assignedBy: owner, assignedTo: [], status: 'todo', attachments: [{ filename, name: 'Original image.png' }], teamId: team }];
   messages = []; conversation = null;
   jest.spyOn(User, 'findById').mockImplementation(() => ({ select: async () => actor }));
+  jest.spyOn(User, 'findOne').mockImplementation(() => ({ select: () => ({ lean: async () => null }) }));
   jest.spyOn(Task, 'find').mockImplementation(() => ({ populate: () => ({ lean: async () => tasks }) }));
   jest.spyOn(Message, 'find').mockImplementation(() => ({ select: () => ({ lean: async () => messages }) }));
   jest.spyOn(Conversation, 'findOne').mockImplementation(() => ({ lean: async () => conversation }));
 });
 test.each(['/uploads/', `/uploads/${filename}`, `/api/files/${filename}`])('anonymous private route %s returns 401', async url => {
   expect((await request(api()).get(url)).status).toBe(401);
+});
+
+test('authenticated colleagues can read an active profile photo owned by its profile owner', async () => {
+  tasks = []; actor._id = outsider;
+  User.findOne.mockReturnValue({ select: () => ({ lean: async () => ({ _id: owner }) }) });
+  const response = await request(api()).get(`/uploads/${filename}`).set('Authorization', `Bearer ${token(outsider)}`);
+  expect(response.status).toBe(200);
+  expect(response.body).toEqual(png);
+  expect(User.findOne).toHaveBeenCalledWith(expect.objectContaining({ _id: owner, isActive: true }));
+  expect((await request(api()).get(`/uploads/${filename}`)).status).toBe(401);
+});
+
+test('unreferenced uploads and documents remain private to their owner', async () => {
+  tasks = []; actor._id = outsider;
+  expect(await resolveFileAccess(filename, actor)).toBeNull();
+  User.findOne.mockClear();
+  expect(await resolveFileAccess(`${owner}-document.pdf`, actor)).toBeNull();
+  expect(User.findOne).not.toHaveBeenCalled();
+});
+
+test('avatar upload returns a canonical HTTPS URL and its owner can download the bytes', async () => {
+  const previous = process.env.PUBLIC_BASE_URL;
+  process.env.PUBLIC_BASE_URL = 'https://api.example.test';
+  tasks = [];
+  let uploaded;
+  try {
+    const response = await request(api()).post('/api/upload')
+      .set('Authorization', `Bearer ${token()}`)
+      .attach('file', png, 'avatar.png');
+    expect(response.status).toBe(200);
+    uploaded = response.body.filename;
+    expect(response.body.url).toBe(`https://api.example.test/uploads/${uploaded}`);
+    const download = await request(api()).get(new URL(response.body.url).pathname)
+      .set('Authorization', `Bearer ${token()}`);
+    expect(download.status).toBe(200);
+    expect(download.body).toEqual(png);
+  } finally {
+    if (uploaded) await fs.unlink(path.join(directory, uploaded));
+    if (previous === undefined) delete process.env.PUBLIC_BASE_URL;
+    else process.env.PUBLIC_BASE_URL = previous;
+  }
 });
 test('real task/admin routes retain authentication and role restrictions', async () => {
   const secured = express();

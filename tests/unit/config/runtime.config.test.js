@@ -12,6 +12,27 @@ const production = () => ({ ...development(), NODE_ENV: 'production', PORT: '808
   ALLOWED_ORIGINS: 'https://app.example.test', ACCEPT_LEGACY_TOKENS: 'false',
   CLOUDINARY_CLOUD_NAME: 'test-cloud', CLOUDINARY_API_KEY: '12345678', CLOUDINARY_API_SECRET: 'fake-test-only-secret' });
 
+test.each(['http://api.example.test', 'https://user:secret@api.example.test', 'https://api.example.test/api', 'https://api.example.test?x=1', 'https://api.example.test#x', 'invalid'])('invalid production public origin is rejected: %s', PUBLIC_BASE_URL => {
+  expect(() => validateRuntimeConfig({ ...production(), PUBLIC_BASE_URL })).toThrow('PUBLIC_BASE_URL');
+});
+
+test('public upload URLs stay HTTPS behind untrusted/plain HTTP ingress', async () => {
+  const previous = process.env.PUBLIC_BASE_URL;
+  process.env.PUBLIC_BASE_URL = 'https://api.example.test/';
+  try {
+    expect(() => validateRuntimeConfig({ ...production(), PUBLIC_BASE_URL: process.env.PUBLIC_BASE_URL })).not.toThrow();
+    const app = express();
+    app.set('trust proxy', false);
+    app.get('/', (req, res) => res.json({ url: getFileUrl('avatar.png', req) }));
+    const response = await request(app).get('/').set('Host', 'untrusted.example').set('X-Forwarded-Proto', 'http');
+    expect(response.body.url).toBe('https://api.example.test/uploads/avatar.png');
+    expect(getFileUrl('avatar.png')).toBe(response.body.url);
+  } finally {
+    if (previous === undefined) delete process.env.PUBLIC_BASE_URL;
+    else process.env.PUBLIC_BASE_URL = previous;
+  }
+});
+
 test('Node 24 contract, local defaults, production port and listen address', () => {
   expect(validateRuntimeConfig(development(), '24.22.1')).toMatchObject({ port: 3000, host: '0.0.0.0', trustProxy: false });
   expect(validateRuntimeConfig(production(), '24.22.1')).toMatchObject({ port: 8080, nodeEnv: 'production' });

@@ -2,6 +2,7 @@ const { isIP } = require('node:net');
 const { MongoClient } = require('mongoose').mongo;
 const { validateTokenConfig } = require('../services/token.service');
 const { createCorsPolicy } = require('./cors.config');
+const { getPublicBaseUrl } = require('./public-url.config');
 
 const fail = message => { throw new Error(message); };
 const present = value => typeof value === 'string' && value.trim().length > 0;
@@ -40,6 +41,7 @@ function validateRuntimeConfig(env = process.env, nodeVersion = process.versions
   if (major !== 24 && !supportedNode22) fail('Development/test requires Node.js 22.13.1+ (22.x) or 24 LTS');
   const port = integer(env.PORT ?? (production ? '' : '3000'), 'PORT', 65535);
   const trustProxy = parseTrustProxy(env.TRUST_PROXY);
+  getPublicBaseUrl(env); // Fail before listening if the configured public origin is invalid.
   const healthcheckTimeoutMs = integer(env.HEALTHCHECK_TIMEOUT_MS ?? '1000', 'HEALTHCHECK_TIMEOUT_MS', 5000);
   const shutdownTimeoutMs = integer(env.SHUTDOWN_TIMEOUT_MS ?? '15000', 'SHUTDOWN_TIMEOUT_MS', 120000);
 

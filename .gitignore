@@ -1,4 +1,5 @@
 node_modules/
+.local-backups/
 .env
 .env.*
 !.env.example
@@ -11,16 +12,20 @@ PERSON_1_CHECKLIST.md
 
 docs/
 *.md
+*.txt
+prompt.txt
+
+#tai lieu
+/report/*
 !report/production-runtime.md
 !report/health-shutdown.md
 !report/docker-production.md
 !report/github-actions-ci.md
 !report/production-deployment-plan.md
-*.txt
-prompt.txt
-
-#tai lieu
-report/
+!report/production-deployment.md
+!report/eas-apk-build.md
+!report/atlas-migration-verification.md
+!report/avatar-upload-fix.md
 
 #du lieu demo
 demo_project/

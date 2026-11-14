@@ -2,6 +2,7 @@ const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
 const { FILE_UPLOAD } = require('../utils/constants.utils');
+const { getPublicBaseUrl } = require('../config/public-url.config');
 
 const uploadsDir = path.join(__dirname, '../uploads');
 if (!fs.existsSync(uploadsDir)) {
@@ -126,6 +127,10 @@ const uploadErrorHandler = (err, req, res, next) => {
 };
 
 const getFileUrl = (filename, req = null) => {
+  // TLS may terminate at the ingress while Express receives plain HTTP.
+  // A configured public origin avoids insecure links and untrusted Host headers.
+  const publicBaseUrl = getPublicBaseUrl();
+  if (publicBaseUrl) return `${publicBaseUrl}/uploads/${encodeURIComponent(filename)}`;
   // If request is available, use it to construct the full URL
   if (req) {
     const protocol = req.protocol;
