@@ -64,7 +64,7 @@ const updateUserValidation = [
   body('email').isString().withMessage('Must be a string').bail()
     .optional()
     .isEmail().withMessage('Invalid email format')
-    .normalizeEmail()
+    .normalizeEmail({ gmail_remove_dots: false })
     .custom(async (email, { req }) => {
       if (email) {
         const user = await User.findOne({

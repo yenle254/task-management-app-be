@@ -16,7 +16,7 @@ const registerValidation = [
     .trim()
     .notEmpty().withMessage('Email is required')
     .isEmail().withMessage('Invalid email format')
-    .normalizeEmail()
+    .normalizeEmail({ gmail_remove_dots: false })
     .isLength({ max: 255 }).withMessage('Email must be at most 255 characters')
     .custom(async (email) => {
       const existingUser = await User.findOne({ email: email.toLowerCase() });
@@ -76,7 +76,7 @@ const loginValidation = [
     .trim()
     .notEmpty().withMessage('Email is required')
     .isEmail().withMessage('Invalid email format')
-    .normalizeEmail(),
+    .normalizeEmail({ gmail_remove_dots: false }),
 
   body('password')
     .isString().withMessage('Password must be a string').bail()
@@ -92,7 +92,7 @@ const forgotPasswordValidation = [
     .trim()
     .notEmpty().withMessage('Email is required')
     .isEmail().withMessage('Invalid email format')
-    .normalizeEmail()
+    .normalizeEmail({ gmail_remove_dots: false })
 ];
 
 /**
@@ -104,7 +104,7 @@ const verifyOTPValidation = [
     .trim()
     .notEmpty().withMessage('Email is required')
     .isEmail().withMessage('Invalid email format')
-    .normalizeEmail(),
+    .normalizeEmail({ gmail_remove_dots: false }),
 
   body('otp')
     .isString().withMessage('Must be a string').bail()
@@ -124,7 +124,7 @@ const resetPasswordValidation = [
     .trim()
     .notEmpty().withMessage('Email is required')
     .isEmail().withMessage('Invalid email format')
-    .normalizeEmail(),
+    .normalizeEmail({ gmail_remove_dots: false }),
 
   body('resetToken')
     .isString().withMessage('Must be a string').bail()

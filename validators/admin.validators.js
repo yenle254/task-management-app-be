@@ -3,7 +3,7 @@ const { body } = require('express-validator');
 const createHRAccountValidation = [
   body('email').isString().withMessage('Must be a string').bail()
     .isEmail().withMessage('Valid email is required')
-    .normalizeEmail(),
+    .normalizeEmail({ gmail_remove_dots: false }),
 
   body('password').isString().withMessage('Must be a string').bail()
     .isLength({ min: 6 }).withMessage('Password must be at least 6 characters'),
