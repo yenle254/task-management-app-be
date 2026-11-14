@@ -177,6 +177,10 @@ const forgotPassword = async (req, res) => {
       await sendResetPasswordEmail(user.email, otp, user.profile.fullName);
     } catch (emailError) {
       console.error("Failed to send email:", emailError);
+      return res.status(503).json({
+        success: false,
+        error: "Unable to send verification email right now. Please try again later.",
+      });
     }
 
     res.status(200).json({
@@ -412,6 +416,10 @@ const resendOTP = async (req, res) => {
       await sendResetPasswordEmail(user.email, otp, user.profile.fullName);
     } catch (emailError) {
       console.error("Failed to send email:", emailError);
+      return res.status(503).json({
+        success: false,
+        error: "Unable to send verification email right now. Please try again later.",
+      });
     }
 
     res.status(200).json({

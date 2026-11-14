@@ -17,6 +17,45 @@ const createTransporter = () => {
   });
 };
 
+const sendViaBrevo = async ({ to, subject, html }) => {
+  const fromEmail = process.env.EMAIL_USER || "noreply@tma.com";
+  const fromName = (process.env.EMAIL_FROM || "").replace(/<.*>/, "").trim() || "Task Management App";
+  const res = await fetch("https://api.brevo.com/v3/smtp/email", {
+    method: "POST",
+    headers: {
+      "accept": "application/json",
+      "content-type": "application/json",
+      "api-key": process.env.BREVO_API_KEY,
+    },
+    body: JSON.stringify({
+      sender: { name: fromName, email: fromEmail },
+      to: [{ email: to }],
+      subject,
+      htmlContent: html,
+    }),
+    signal: AbortSignal.timeout(15000),
+  });
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(`Brevo API error (${res.status}): ${body.message || JSON.stringify(body)}`);
+  return { success: true, messageId: body.messageId };
+};
+
+const sendViaResend = async ({ to, subject, html }) => {
+  const from = process.env.RESEND_FROM || process.env.EMAIL_FROM || "Task Management App <onboarding@resend.dev>";
+  const res = await fetch("https://api.resend.com/emails", {
+    method: "POST",
+    headers: {
+      "authorization": `Bearer ${process.env.RESEND_API_KEY}`,
+      "content-type": "application/json",
+    },
+    body: JSON.stringify({ from, to: [to], subject, html }),
+    signal: AbortSignal.timeout(15000),
+  });
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(`Resend API error (${res.status}): ${body.message || JSON.stringify(body)}`);
+  return { success: true, messageId: body.id };
+};
+
 /**
  * Gửi email OTP để reset password
  * @param {string} email - Email người nhận
@@ -25,13 +64,8 @@ const createTransporter = () => {
  */
 const sendResetPasswordEmail = async (email, otp, fullName) => {
   try {
-    const transporter = createTransporter();
-
-    const mailOptions = {
-      from: process.env.EMAIL_FROM || "Task Management App <noreply@tma.com>",
-      to: email,
-      subject: "Reset Your Password - Task Management App",
-      html: `
+    const subject = "Reset Your Password - Task Management App";
+    const html = `
         <!DOCTYPE html>
         <html>
         <head>
@@ -69,10 +103,27 @@ const sendResetPasswordEmail = async (email, otp, fullName) => {
           </div>
         </body>
         </html>
-      `,
-    };
+      `;
 
-    const info = await transporter.sendMail(mailOptions);
+    if (process.env.BREVO_API_KEY) {
+      const info = await sendViaBrevo({ to: email, subject, html });
+      console.log("Email sent via Brevo:", info.messageId);
+      return info;
+    }
+
+    if (process.env.RESEND_API_KEY) {
+      const info = await sendViaResend({ to: email, subject, html });
+      console.log("Email sent via Resend:", info.messageId);
+      return info;
+    }
+
+    const transporter = createTransporter();
+    const info = await transporter.sendMail({
+      from: process.env.EMAIL_FROM || "Task Management App <noreply@tma.com>",
+      to: email,
+      subject,
+      html,
+    });
     console.log("Email sent:", info.messageId);
     return { success: true, messageId: info.messageId };
   } catch (error) {
