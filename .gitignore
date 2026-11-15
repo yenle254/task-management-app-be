@@ -16,16 +16,7 @@ docs/
 prompt.txt
 
 #tai lieu
-/report/*
-!report/production-runtime.md
-!report/health-shutdown.md
-!report/docker-production.md
-!report/github-actions-ci.md
-!report/production-deployment-plan.md
-!report/production-deployment.md
-!report/eas-apk-build.md
-!report/atlas-migration-verification.md
-!report/avatar-upload-fix.md
+/report/
 
 #du lieu demo
 demo_project/
