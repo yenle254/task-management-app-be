@@ -5,6 +5,8 @@ const AttendanceSchema = new mongoose.Schema({
     date: { type: Date, required: true, index: true },
     clockIn: { type: Date, required: true },
     clockOut: { type: Date },
+    // Preserve the HR schedule used at clock-in for later automatic clock-out.
+    workingHours: { type: new mongoose.Schema({ start: String, end: String }, { _id: false }), default: undefined },
     location: {
         lat: { type: Number, required: true },
         lng: { type: Number, required: true }

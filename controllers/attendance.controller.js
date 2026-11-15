@@ -1,6 +1,7 @@
 const audit = require('../services/audit.service');
 const Attendance = require('../models/attendance.model');
 const attendanceService = require('../services/attendance.service');
+const officeService = require('../services/office.service');
 const User = require('../models/user.model');
 const { parseDate, normalizeRange } = require('../utils/dashboard.helper');
 
@@ -22,7 +23,8 @@ const clockIn = async (req, res) => {
             });
         }
 
-        const todayAttendance = await attendanceService.getTodayAttendance(userId);
+        const clockInTime = new Date();
+        const todayAttendance = await attendanceService.getTodayAttendance(userId, clockInTime);
         if (todayAttendance && todayAttendance.clockIn) {
             return res.status(400).json({
                 success: false,
@@ -30,7 +32,9 @@ const clockIn = async (req, res) => {
             });
         }
 
-        const validLocation = await attendanceService.validateLocation(lat, lng);
+        const office = await officeService.getActiveOffice();
+        if (!office) return res.status(400).json({ success: false, message: 'No active office configured. Please contact HR.' });
+        const validLocation = await attendanceService.validateLocation(lat, lng, office);
         if (!validLocation) {
             return res.status(400).json({
                 success: false,
@@ -38,29 +42,20 @@ const clockIn = async (req, res) => {
             });
         }
 
-        const clockInTime = new Date();
-        const currentHour = clockInTime.getHours();
-        
-        // Check if before 6 AM (06:00) or after 6 PM (18:00)
-        if (currentHour < 6) {
+        const schedule = attendanceService.getWorkingWindow(clockInTime, office.workingHours);
+        if (clockInTime >= schedule.endTime) {
             return res.status(400).json({
                 success: false,
-                message: 'Clock-in is not allowed before 6:00 AM. Office hours are from 6:00 AM to 6:00 PM.'
-            });
-        }
-        
-        if (currentHour >= 18) {
-            return res.status(400).json({
-                success: false,
-                message: 'Clock-in is not allowed after 6:00 PM. Please contact HR if you need to record attendance for today.'
+                message: `Clock-in is not allowed at or after ${schedule.end}. Office hours are ${schedule.start} - ${schedule.end} (${process.env.TZ || Intl.DateTimeFormat().resolvedOptions().timeZone}). Please contact HR.`
             });
         }
 
-        const status = attendanceService.determineStatus(clockInTime);
+        const status = attendanceService.determineStatus(clockInTime, office.workingHours);
         const attendanceRecord = new Attendance({
             userId,
             date: clockInTime,
             clockIn: clockInTime,
+            workingHours: { start: schedule.start, end: schedule.end },
             status,
             location: {
                 lat,
@@ -155,11 +150,13 @@ const getMyAttendance = async (req, res) => {
                 // Get actual attendance records
                 let records = await Attendance.find(query).sort({ date: -1 });
                 
+                // Legacy records without a schedule snapshot use the current active office.
+                const activeOffice = await officeService.getActiveOffice();
                 // Auto clock-out for incomplete past records
                 const recordsToUpdate = [];
                 records = records.map(record => {
                     const originalClockOut = record.clockOut;
-                    const updatedRecord = attendanceService.autoClockOutIfNeeded(record);
+                    const updatedRecord = attendanceService.autoClockOutIfNeeded(record, activeOffice?.workingHours);
                     
                     // If auto clock-out was applied, save to DB
                     if (!originalClockOut && updatedRecord.clockOut && updatedRecord.autoClockOut) {

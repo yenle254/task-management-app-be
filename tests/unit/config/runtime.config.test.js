@@ -12,6 +12,27 @@ const production = () => ({ ...development(), NODE_ENV: 'production', PORT: '808
   ALLOWED_ORIGINS: 'https://app.example.test', ACCEPT_LEGACY_TOKENS: 'false',
   CLOUDINARY_CLOUD_NAME: 'test-cloud', CLOUDINARY_API_KEY: '12345678', CLOUDINARY_API_SECRET: 'fake-test-only-secret' });
 
+test('business timezone defaults to Vietnam and invalid zones fail startup validation', () => {
+  expect(validateRuntimeConfig(development()).timezone).toBe('Asia/Ho_Chi_Minh');
+  expect(() => validateRuntimeConfig({ ...development(), TZ: 'Mars/Invalid' })).toThrow('TZ');
+});
+
+test('runtime converts the UTC clock and day boundaries to the Vietnam business day', () => {
+  const script = `
+    require('./config/runtime.config').loadRuntimeConfig();
+    const at = new Date('2026-11-14T05:27:00Z');
+    const midnight = new Date('2026-11-14T17:30:00Z'); midnight.setHours(0,0,0,0);
+    const service = require('./services/attendance.service');
+    console.log(JSON.stringify({ hour: at.getHours(), status: service.determineStatus(at, {start:'09:00',end:'18:00'}), midnight: midnight.toISOString() }));
+  `;
+  const result = spawnSync(process.execPath, ['-e', script], {
+    cwd: path.resolve(__dirname, '../../..'),
+    env: { ...process.env, ...development(), TZ: 'Asia/Ho_Chi_Minh' }, encoding: 'utf8', timeout: 5000,
+  });
+  expect(result.status).toBe(0);
+  expect(JSON.parse(result.stdout)).toEqual({ hour: 12, status: 'late', midnight: '2026-11-14T17:00:00.000Z' });
+});
+
 test.each(['http://api.example.test', 'https://user:secret@api.example.test', 'https://api.example.test/api', 'https://api.example.test?x=1', 'https://api.example.test#x', 'invalid'])('invalid production public origin is rejected: %s', PUBLIC_BASE_URL => {
   expect(() => validateRuntimeConfig({ ...production(), PUBLIC_BASE_URL })).toThrow('PUBLIC_BASE_URL');
 });

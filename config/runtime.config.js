@@ -35,6 +35,9 @@ function validateRuntimeConfig(env = process.env, nodeVersion = process.versions
   const nodeEnv = env.NODE_ENV ?? 'development';
   if (!['development', 'test', 'production'].includes(nodeEnv)) fail('NODE_ENV must be development, test or production');
   const production = nodeEnv === 'production';
+  const timezone = env.TZ || 'Asia/Ho_Chi_Minh';
+  try { new Intl.DateTimeFormat('en', { timeZone: timezone }).format(); }
+  catch { fail('TZ must be a valid IANA timezone'); }
   const [major, minor, patch] = nodeVersion.split('.').map(Number);
   if (production && major !== 24) fail('Production requires Node.js 24 LTS (see .nvmrc)');
   const supportedNode22 = major === 22 && (minor > 13 || (minor === 13 && patch >= 1));
@@ -104,13 +107,14 @@ function validateRuntimeConfig(env = process.env, nodeVersion = process.versions
   if (env.OLLAMA_TIMEOUT_MS !== undefined && env.OLLAMA_TIMEOUT_MS !== '') integer(env.OLLAMA_TIMEOUT_MS, 'OLLAMA_TIMEOUT_MS', 120000);
   if (production && env.AI_PROVIDER === 'ollama' && !present(env.OLLAMA_BASE_URL)) fail('OLLAMA_BASE_URL is required for production AI_PROVIDER=ollama');
 
-  return { nodeEnv, port, host: '0.0.0.0', trustProxy, cors, healthcheckTimeoutMs, shutdownTimeoutMs };
+  return { nodeEnv, timezone, port, host: '0.0.0.0', trustProxy, cors, healthcheckTimeoutMs, shutdownTimeoutMs };
 }
 
 function loadRuntimeConfig() {
   require('dotenv').config({ quiet: true });
   const config = validateRuntimeConfig();
   process.env.NODE_ENV = config.nodeEnv;
+  process.env.TZ = config.timezone;
   return config;
 }
 

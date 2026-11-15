@@ -24,10 +24,25 @@ const calculateWorkHours = (clockIn, clockOut) => {
  * @param {Date} clockInTime
  * @returns {String}
 **/ 
-const determineStatus = (clockInTime) => {
+const getWorkingWindow = (date, workingHours = {}) => {
+    const start = workingHours.start || '09:00';
+    const end = workingHours.end || '18:00';
+    const time = value => /^([01]?\d|2[0-3]):[0-5]\d$/.test(value);
+    if (!time(start) || !time(end)) throw new Error('Invalid office working hours');
+    const at = value => {
+        const [hour, minute] = value.split(':').map(Number);
+        const result = new Date(date);
+        result.setHours(hour, minute, 0, 0);
+        return result;
+    };
+    const startTime = at(start), endTime = at(end);
+    if (endTime <= startTime) throw new Error('Office end time must be after start time');
+    return { start, end, startTime, endTime };
+};
+
+const determineStatus = (clockInTime, workingHours) => {
     const inTime = new Date(clockInTime);
-    const standardStart = new Date(inTime);
-    standardStart.setHours(9, 0, 0, 0); // 9:00 AM
+    const standardStart = getWorkingWindow(inTime, workingHours).startTime;
     return inTime <= standardStart ? 'present' : 'late';    
 }
 
@@ -37,10 +52,10 @@ const determineStatus = (clockInTime) => {
  * @param {String} userId
  * @returns {Object|null}
 **/
-const getTodayAttendance = async (userId) => {
-    const startOfDay = new Date();
+const getTodayAttendance = async (userId, now = new Date()) => {
+    const startOfDay = new Date(now);
     startOfDay.setHours(0, 0, 0, 0);
-    const endOfDay = new Date();
+    const endOfDay = new Date(now);
     endOfDay.setHours(23, 59, 59, 999);
     return await Attendance.findOne({
         userId,
@@ -137,7 +152,7 @@ const getAttendanceStats = async (userId, startDate, endDate) => {
  * @param {Object} record - Attendance record
  * @returns {Object} Updated record
  */
-const autoClockOutIfNeeded = (record) => {
+const autoClockOutIfNeeded = (record, workingHours) => {
     // Only process if no clock-out
     if (record.clockOut) {
         return record;
@@ -151,8 +166,9 @@ const autoClockOutIfNeeded = (record) => {
     
     // If record is from past (not today), auto clock-out at 6 PM
     if (recordDate < today) {
-        const autoClockOutTime = new Date(record.date);
-        autoClockOutTime.setHours(18, 0, 0, 0); // 6:00 PM
+        const scheduledEnd = getWorkingWindow(record.date, record.workingHours || workingHours).endTime;
+        // Legacy records may have been accepted after the old cutoff; never create negative hours.
+        const autoClockOutTime = new Date(Math.max(scheduledEnd.getTime(), new Date(record.clockIn).getTime()));
         
         record.clockOut = autoClockOutTime;
         record.workHours = calculateWorkHours(record.clockIn, autoClockOutTime);
@@ -168,13 +184,14 @@ const autoClockOutIfNeeded = (record) => {
  * @param {Number} lng
  * @returns {Boolean}
  **/
-const validateLocation = async (lat, lng) => {
-    return await validateOfficeLocation(lat, lng);
+const validateLocation = async (lat, lng, office) => {
+    return office ? await validateOfficeLocation(lat, lng, office) : await validateOfficeLocation(lat, lng);
 }
 
 module.exports = {
     calculateWorkHours,
     determineStatus,
+    getWorkingWindow,
     getTodayAttendance,
     getAttendanceStats,
     isWorkingDay,

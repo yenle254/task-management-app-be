@@ -18,8 +18,8 @@ const getActiveOffice = async () => {
  * @param {Number} lng - Longitude
  * @returns {Boolean}
  */
-const validateLocation = async (lat, lng) => {
-  const office = await getActiveOffice();
+const validateLocation = async (lat, lng, snapshot) => {
+  const office = snapshot || await getActiveOffice();
 
   if (!office) {
     // Nếu không có office nào active, cho phép check-in (hoặc reject tùy yêu cầu)

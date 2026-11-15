@@ -60,6 +60,21 @@ test('board sorts due dates with nulls last and excludes children by default', a
   await view('board?includeSubtasks=true');
   expect(Task.find.mock.calls.at(-1)[0].parentTaskId).toBeUndefined();
 });
+
+test.each(['calendar', 'timeline'])('HR %s management scope includes tasks assigned to others without restricting to HR team', async name => {
+  const otherTask = { _id: id(), title: 'Another team task', assignedTo: [id()], dueDate: new Date('2026-10-15') };
+  Task.find.mockReturnValue(chain([otherTask]));
+  const result = await view(`${name}?from=2026-10-01&to=2026-10-31&scope=team`);
+  expect(result.status).toBe(200);
+  expect(result.body.data[0].title).toBe('Another team task');
+  const query = Task.find.mock.calls.at(-1)[0];
+  expect(query.assignedTo).toBeUndefined();
+  expect(query.teamId).toBeUndefined();
+  expect(query.status).toEqual({ $ne: 'deleted' });
+  expect(query.$or).toHaveLength(2);
+  await view(`${name}?from=2026-10-01&to=2026-10-31&scope=self`);
+  expect(Task.find.mock.calls.at(-1)[0].assignedTo).toBe(user._id);
+});
 test('team views require the database leader as well as matching user.teamId', async () => {
   user.role = 'team_lead';
   const team = { _id: user.teamId, leaderId: user._id };
@@ -72,6 +87,8 @@ test('team views require the database leader as well as matching user.teamId', a
 test('authentication, ownership, missing and deleted task guards', async () => {
   expect((await request(app).get(`/api/tasks/${task._id}/history`)).status).toBe(401);
   user.role = 'employee'; user._id = id();
+  expect((await call('get', '/history')).status).toBe(200); // Same-team read access.
+  user.teamId = id();
   expect((await call('get', '/history')).status).toBe(403);
   task.status = 'deleted';
   expect((await call('get', '/history')).status).toBe(404);

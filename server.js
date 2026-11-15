@@ -113,6 +113,7 @@ app.use("/api/notifications", notificationRoutes);
 app.use("/api/messages", generalLimiter, messageRoutes);
 app.use("/api/upload", uploadRoutes);
 app.use("/api/offices", generalLimiter, officeRoutes);
+app.use('/api/maps', require('./routes/map.routes').createMapRouter());
 app.use("/api/statistics", generalLimiter, statisticsRoutes);
 app.use("/api/employees", generalLimiter, employeeRoutes);
 app.use("/api/admin", adminRoutes);

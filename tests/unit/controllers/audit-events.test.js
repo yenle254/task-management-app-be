@@ -67,12 +67,12 @@ test('unauthenticated recovery identifies the target without impersonating it as
   await auth.forgotPassword(request, response()); await tick();
   expect(rows[0]).toMatchObject({ actor: { id: null }, target: { id: String(user._id) }, metadata: { email: user.email } });
 });
-test.each(['forgotPassword', 'resendOTP'])('%s records saved OTP even when mocked email fails', async method => {
+test.each(['forgotPassword', 'resendOTP'])('%s returns 503 and records saved OTP when mocked email fails', async method => {
   jest.spyOn(User, 'findOne').mockReturnValue(chain(user));
   sendResetPasswordEmail.mockRejectedValueOnce(new Error('mock email unavailable'));
   jest.spyOn(console, 'error').mockImplementation(() => {});
   const res = response(); await auth[method](req({ email: user.email }), res); await tick();
-  expect(res.statusCode).toBe(200); expect(user.save).toHaveBeenCalled(); expect(rows[0].action).toBe('auth.password_reset_requested');
+  expect(res.statusCode).toBe(503); expect(user.save).toHaveBeenCalled(); expect(rows[0].action).toBe('auth.password_reset_requested');
   expect(JSON.stringify(rows)).not.toContain(user.resetPassword.otp);
 });
 test.each([['invalid_otp', { otp: '111111' }], ['expired', { otpExpires: new Date(0) }], ['attempts_exhausted', { attempts: 5 }]])('OTP %s emits failure without OTP/token', async (reason, changes) => {

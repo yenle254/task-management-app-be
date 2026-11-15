@@ -63,4 +63,13 @@ describe('attendance service date and status rules', () => {
     expect(await attendanceService.validateLocation(10, 106)).toBe(true);
     expect(officeService.validateLocation).toHaveBeenCalledWith(10, 106);
   });
+
+  test('automatic clock-out uses the captured HR end time, not a later office edit', () => {
+    const date = new Date(); date.setDate(date.getDate() - 1); date.setHours(10, 30, 0, 0);
+    const record = { date, clockIn: date, workingHours: { start: '10:30', end: '17:15' } };
+    attendanceService.autoClockOutIfNeeded(record, { start: '09:00', end: '18:00' });
+    expect(record.clockOut.getHours()).toBe(17);
+    expect(record.clockOut.getMinutes()).toBe(15);
+    expect(record.workHours).toBe(6.75);
+  });
 });
