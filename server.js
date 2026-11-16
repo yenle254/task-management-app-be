@@ -26,6 +26,7 @@ const { httpCorsOptions, socketCorsOptions, allowSocketRequest } = runtime.cors;
 const { securityHeaders, permissionsPolicy } = require('./config/security.config');
 const sanitizeInput = require('./middleware/sanitize.middleware');
 const app = express();
+app.disable('x-powered-by');
 app.set('trust proxy', runtime.trustProxy);
 const server = http.createServer(app);
 
