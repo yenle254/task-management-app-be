@@ -4,8 +4,13 @@ const {
   buildLocalTaskBreakdown,
   buildLocalTaskSummary
 } = require('../../services/ai-assistant.service');
+const {
+  fuzzyMatchEntity,
+  resolveContextualEntity,
+  safeParseJSON
+} = require('../../utils/vietnamese-nlp.utils');
 
-describe('AI HR & Task Copilot (server/chat_bot)', () => {
+describe('AI HR & Task Copilot v2 (server/chat_bot)', () => {
   const sampleEmployeeContext = {
     currentTimeISO: '2026-11-06T10:00:00.000Z',
     todayDate: '2026-11-06',
@@ -64,6 +69,9 @@ describe('AI HR & Task Copilot (server/chat_bot)', () => {
     },
     personalTasks: {
       totalOpen: 2,
+      completedCount: 6,
+      completionRate: 75,
+      onTimeRate: 100,
       overdueCount: 0,
       blockedCount: 1,
       inProgressCount: 1,
@@ -80,7 +88,11 @@ describe('AI HR & Task Copilot (server/chat_bot)', () => {
           isOverdue: false,
           isBlocked: false,
           blockedByTitles: [],
-          progress: 50
+          progress: 50,
+          actualMinutes: 120,
+          estimatedMinutes: 240,
+          subTasksSummary: '2/4',
+          pendingSubTaskTitles: ['Tạo bảng AuditLog', 'Đánh index tìm kiếm']
         }
       ],
       openTasksList: [
@@ -94,7 +106,11 @@ describe('AI HR & Task Copilot (server/chat_bot)', () => {
           isOverdue: false,
           isBlocked: false,
           blockedByTitles: [],
-          progress: 50
+          progress: 50,
+          actualMinutes: 120,
+          estimatedMinutes: 240,
+          subTasksSummary: '2/4',
+          pendingSubTaskTitles: ['Tạo bảng AuditLog', 'Đánh index tìm kiếm']
         },
         {
           _id: '671f00000000000000000011',
@@ -106,10 +122,15 @@ describe('AI HR & Task Copilot (server/chat_bot)', () => {
           isOverdue: false,
           isBlocked: true,
           blockedByTitles: ['Thiết kế Database'],
-          progress: 0
+          progress: 0,
+          actualMinutes: 0,
+          estimatedMinutes: 180,
+          subTasksSummary: '0/3',
+          pendingSubTaskTitles: ['Cấu hình Webhook', 'Xử lý chữ ký bảo mật']
         }
       ]
     },
+    pendingApprovals: null,
     teamWorkloadAdvisor: null
   };
 
@@ -171,10 +192,35 @@ describe('AI HR & Task Copilot (server/chat_bot)', () => {
     expect(taskRes.reply).toContain('Tích hợp API Thanh toán');
   });
 
-  test('4. Smart Workload Advisor recommends available team members and excludes members on leave', () => {
+  test('4. Smart Workload Advisor prioritizes proven high-completion performers over 0% unproven members', () => {
     const leadContext = {
       ...sampleEmployeeContext,
       user: { ...sampleEmployeeContext.user, role: 'team_lead' },
+      pendingApprovals: {
+        pendingLeaveCount: 1,
+        pendingLeaves: [
+          {
+            _id: 'lv1',
+            employeeName: 'Lê Nghỉ Phép',
+            type: 'personal',
+            startDate: '2026-11-06',
+            endDate: '2026-11-07',
+            numberOfDays: 2,
+            status: 'pending_team_lead',
+            reason: 'Việc riêng'
+          }
+        ],
+        tasksInReviewCount: 1,
+        tasksInReview: [
+          {
+            _id: 't99',
+            title: 'Tối ưu Index MongoDB',
+            priority: 'high',
+            dueDate: '2026-11-07',
+            assignees: ['Phạm Hiệu Suất Cao']
+          }
+        ]
+      },
       teamWorkloadAdvisor: {
         teamId: 'team1',
         teamName: 'Core Engineering',
@@ -186,34 +232,99 @@ describe('AI HR & Task Copilot (server/chat_bot)', () => {
             upcomingLeaves: [{ startDate: '2026-11-06', endDate: '2026-11-07' }]
           }
         ],
+        provenRecommendees: [
+          {
+            userId: 'u3',
+            userName: 'Phạm Hiệu Suất Cao',
+            isUnproven: false,
+            completedTasks: 9,
+            completedHardTasks: 3,
+            totalTasks: 10,
+            inProgressTasks: 1,
+            todoTasks: 0,
+            overdueTasks: 0,
+            onTimeRate: 96,
+            completionRate: 90
+          }
+        ],
+        unprovenAvailable: [
+          {
+            userId: 'u4',
+            userName: 'Trần Mới Vào (0%)',
+            isUnproven: true,
+            completedTasks: 0,
+            totalTasks: 0,
+            inProgressTasks: 0,
+            todoTasks: 0,
+            overdueTasks: 0,
+            onTimeRate: 0,
+            completionRate: 0
+          }
+        ],
         recommendedAssignees: [
           {
             userId: 'u3',
-            userName: 'Phạm Rảnh Rỗi',
-            inProgressTasks: 0,
-            todoTasks: 1,
+            userName: 'Phạm Hiệu Suất Cao',
+            isUnproven: false,
+            completedTasks: 9,
+            totalTasks: 10,
+            inProgressTasks: 1,
+            todoTasks: 0,
             overdueTasks: 0,
             onTimeRate: 96,
-            completionRate: 92
+            completionRate: 90
+          },
+          {
+            userId: 'u4',
+            userName: 'Trần Mới Vào (0%)',
+            isUnproven: true,
+            completedTasks: 0,
+            totalTasks: 0,
+            inProgressTasks: 0,
+            todoTasks: 0,
+            overdueTasks: 0,
+            onTimeRate: 0,
+            completionRate: 0
           }
         ],
         allMembersWorkload: [
           {
             userId: 'u3',
-            userName: 'Phạm Rảnh Rỗi',
-            inProgressTasks: 0,
-            todoTasks: 1,
+            userName: 'Phạm Hiệu Suất Cao',
+            isUnproven: false,
+            completedTasks: 9,
+            totalTasks: 10,
+            inProgressTasks: 1,
+            todoTasks: 0,
             overdueTasks: 0,
             onTimeRate: 96,
+            completionRate: 90,
+            hasApprovedLeaveNext2Days: false
+          },
+          {
+            userId: 'u4',
+            userName: 'Trần Mới Vào (0%)',
+            isUnproven: true,
+            completedTasks: 0,
+            totalTasks: 0,
+            inProgressTasks: 0,
+            todoTasks: 0,
+            overdueTasks: 0,
+            onTimeRate: 0,
+            completionRate: 0,
             hasApprovedLeaveNext2Days: false
           },
           {
             userId: 'u2',
             userName: 'Lê Nghỉ Phép',
+            isUnproven: false,
+            completedTasks: 4,
+            totalTasks: 5,
             inProgressTasks: 1,
             todoTasks: 0,
             overdueTasks: 0,
             onTimeRate: 85,
+            completionRate: 80,
             hasApprovedLeaveNext2Days: true
           }
         ]
@@ -224,33 +335,56 @@ describe('AI HR & Task Copilot (server/chat_bot)', () => {
       'Tôi có một task độ khó Hard cần làm gấp trong 2 ngày tới, nên giao cho ai trong team?',
       leadContext
     );
-    expect(advisorRes.reply).toContain('Lê Nghỉ Phép');
-    expect(advisorRes.reply).toContain('Phạm Rảnh Rỗi');
+    expect(advisorRes.reply).toContain('Phạm Hiệu Suất Cao');
+    expect(advisorRes.reply).toContain('90%');
     expect(advisorRes.reply).toContain('96%');
+    expect(advisorRes.reply).toContain('Trần Mới Vào (0%)');
+    expect(advisorRes.reply).toContain('Không ưu tiên giao việc Gấp/Hard');
     expect(advisorRes.proposedAction?.type).toBe('CREATE_TASK_DRAFT');
     expect(advisorRes.proposedAction?.payload?.assigneeId).toBe('u3');
+
+    const approvalRes = buildLocalAssistantReply(
+      'Hiện tại có đơn nghỉ phép hay task nào đang chờ tôi duyệt không?',
+      leadContext
+    );
+    expect(approvalRes.reply).toContain('Tối ưu Index MongoDB');
+    expect(approvalRes.reply).toContain('Lê Nghỉ Phép');
   });
 
-  test('5. Chat-to-Action extracts LOG_TIME and CREATE_LEAVE intents accurately', () => {
-    const logIntent = extractActionIntent(
-      'Log giúp tôi 60 phút làm việc cho task Thiết kế Database với ghi chú: hoàn thành bảng Audit',
+  test('5. Chat-to-Action & Multi-turn Coreference + Fuzzy Matching work accurately', () => {
+    // Abbreviated & diacritic-free fuzzy match: "task thiet ke db" -> "Thiết kế Database"
+    const fuzzyLog = extractActionIntent(
+      'Log giup toi 45 phut cho task thiet ke db voi ghi chu: hoàn thành bảng Audit',
       sampleEmployeeContext
     );
-    expect(logIntent).toBeTruthy();
-    expect(logIntent.type).toBe('LOG_TIME');
-    expect(logIntent.payload.taskId).toBe('671f00000000000000000010');
-    expect(logIntent.payload.minutes).toBe(60);
-    expect(logIntent.payload.note).toBe('hoàn thành bảng Audit');
+    expect(fuzzyLog).toBeTruthy();
+    expect(fuzzyLog.type).toBe('LOG_TIME');
+    expect(fuzzyLog.payload.taskId).toBe('671f00000000000000000010');
+    expect(fuzzyLog.payload.minutes).toBe(45);
 
-    const leaveIntent = extractActionIntent(
-      'Tạo đơn xin nghỉ phép ngày mai vì lý do cá nhân',
+    // Multi-turn coreference: previous turn discussed "Tích hợp API Thanh toán"
+    const history = [
+      { role: 'user', content: 'Kiểm tra task Tích hợp API Thanh toán' },
+      { role: 'assistant', content: 'Task Tích hợp API Thanh toán hiện đang ở trạng thái todo...' }
+    ];
+    const corefReply = buildLocalAssistantReply(
+      'Task đó còn những subtask nào chưa xong?',
+      sampleEmployeeContext,
+      history
+    );
+    expect(corefReply.reply).toContain('Tích hợp API Thanh toán');
+    expect(corefReply.reply).toContain('Cấu hình Webhook');
+
+    // Compound multi-intent question (Priority tasks + Leave balance in a single question)
+    const compoundReply = buildLocalAssistantReply(
+      'Hôm nay tôi cần ưu tiên làm task nào và năm nay tôi còn bao nhiêu ngày phép?',
       sampleEmployeeContext
     );
-    expect(leaveIntent).toBeTruthy();
-    expect(leaveIntent.type).toBe('CREATE_LEAVE');
-    expect(leaveIntent.payload.type).toBe('personal');
-    expect(leaveIntent.payload.startDate).toBe('2026-11-07');
-    expect(leaveIntent.payload.endDate).toBe('2026-11-07');
+    expect(compoundReply.reply).toContain('Thiết kế Database');
+    expect(compoundReply.reply).toContain('9 ngày');
+
+    // Truncated JSON repair
+    const repaired = safeParseJSON('{"reply": "Xin chào bạn, đây là câu trả lời bị cắt ngang');
+    expect(repaired).toEqual({ reply: 'Xin chào bạn, đây là câu trả lời bị cắt ngang' });
   });
 });
-

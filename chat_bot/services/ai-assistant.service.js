@@ -8,6 +8,9 @@ const {
 } = require('../config/ai.config');
 const {
   normalizeVi,
+  fuzzyMatchEntity,
+  resolveContextualEntity,
+  safeParseJSON,
   formatDateISO,
   getRoleSuggestedQuestions
 } = require('../utils/vietnamese-nlp.utils');
@@ -30,7 +33,7 @@ const isOllamaRunning = async () => {
 };
 
 /**
- * Call Local Ollama Chat API with Structured JSON Schema
+ * Call Local Ollama Chat API with Structured JSON & Automatic JSON Repair
  */
 const callOllamaJSON = async (systemPrompt, userPrompt) => {
   if (AI_CONFIG.PROVIDER === 'local_only') return null;
@@ -49,8 +52,8 @@ const callOllamaJSON = async (systemPrompt, userPrompt) => {
       keep_alive: '30m',
       options: {
         temperature: 0.2,
-        num_ctx: 1536,
-        num_predict: 280
+        num_ctx: 3072,
+        num_predict: 650
       }
     },
     { timeout: AI_CONFIG.OLLAMA_TIMEOUT_MS }
@@ -58,7 +61,7 @@ const callOllamaJSON = async (systemPrompt, userPrompt) => {
 
   const content = response.data?.message?.content;
   if (!content) return null;
-  return JSON.parse(content);
+  return safeParseJSON(content);
 };
 
 /**
@@ -85,7 +88,7 @@ const callGeminiJSON = async (systemPrompt, userPrompt, schema) => {
 
   const text = response.data?.candidates?.[0]?.content?.parts?.[0]?.text;
   if (!text) return null;
-  return JSON.parse(text);
+  return safeParseJSON(text);
 };
 
 /**
@@ -134,11 +137,13 @@ const invokeStructuredAI = async ({ systemPrompt, userPrompt, schema, fallbackFn
 
 /**
  * Extract Chat-to-Action intent (LOG_TIME or CREATE_LEAVE) from natural Vietnamese message
+ * Uses Fuzzy Matching + Multi-turn Coreference (history)
  */
-const extractActionIntent = (message, context) => {
+const extractActionIntent = (message, context, history = []) => {
   const raw = String(message || '').trim();
   const norm = normalizeVi(raw);
 
+  // 1. LOG_TIME intent
   const isLogTime =
     (norm.includes('log') ||
       norm.includes('ghi nhan') ||
@@ -165,30 +170,16 @@ const extractActionIntent = (message, context) => {
       note = noteMatch[1].trim();
     }
 
+    // Strip note & command prefix before fuzzy matching task title
+    const messageWithoutNote = noteMatch ? raw.slice(0, noteMatch.index) : raw;
     const openTasks = context.personalTasks?.openTasksList || [];
-    let matchedTask = null;
 
-    for (const t of openTasks) {
-      const tNorm = normalizeVi(t.title);
-      if (tNorm && norm.includes(tNorm)) {
-        matchedTask = t;
-        break;
-      }
-    }
-
-    if (!matchedTask && openTasks.length > 0) {
-      const taskPhraseMatch = raw.match(
-        /(?:task|công\s*việc|việc)\s+["']?([^"':]+?)(?:\s+với\s+ghi\s*chú|\s+ghi\s*chú|\s+note|$)/i
-      );
-      const targetHint = taskPhraseMatch ? normalizeVi(taskPhraseMatch[1]) : '';
-      if (targetHint) {
-        matchedTask =
-          openTasks.find((t) => {
-            const tNorm = normalizeVi(t.title);
-            return tNorm.includes(targetHint) || targetHint.includes(tNorm);
-          }) || null;
-      }
-    }
+    let matchedTask = resolveContextualEntity(
+      messageWithoutNote,
+      history,
+      openTasks,
+      (t) => t.title
+    );
 
     if (!matchedTask && openTasks.length > 0) {
       matchedTask = openTasks[0];
@@ -208,16 +199,18 @@ const extractActionIntent = (message, context) => {
     }
   }
 
+  // 2. CREATE_LEAVE intent
   const isCreateLeave =
     (norm.includes('tao don') ||
       norm.includes('nop don') ||
       norm.includes('xin nghi') ||
       norm.includes('dang ky nghi') ||
-      norm.includes('nghi phep')) &&
+      (norm.includes('nghi phep') && (norm.includes('ngay mai') || norm.includes('hom nay') || norm.includes('tu ngay') || norm.includes('ly do')))) &&
     !norm.includes('con bao nhieu') &&
     !norm.includes('may ngay') &&
     !norm.includes('kiem tra') &&
-    !norm.includes('ai dang');
+    !norm.includes('ai dang') &&
+    !norm.includes('cho toi duyet');
 
   if (isCreateLeave) {
     let leaveType = 'personal';
@@ -291,13 +284,135 @@ const extractActionIntent = (message, context) => {
 };
 
 /**
- * Local fallback generator for /api/ai/assistant using real MongoDB context
+ * Format Smart Workload Advisor section with Experience-Weighted Tiered Filtering
+ * (Prioritizes Proven High-Completion / High-OnTime Performers over 0% Unproven accounts)
  */
-const buildLocalAssistantReply = (message, context) => {
+const formatWorkloadAdvisorSection = (context, normMessage) => {
+  if (!context.teamWorkloadAdvisor) {
+    return {
+      text: 'Tính năng **Trợ lý Điều phối & Gợi ý Giao việc (Smart Workload Advisor)** chỉ dành cho **Team Lead** hoặc **HR Manager** có quản lý đội nhóm.',
+      action: null
+    };
+  }
+
+  const adv = context.teamWorkloadAdvisor;
+
+  const onLeaveLines =
+    adv.membersOnLeaveNext2Days.length > 0
+      ? adv.membersOnLeaveNext2Days
+          .map(
+            (m) =>
+              `  - ❌ **${m.userName}**: Đang có lịch nghỉ phép đã duyệt (${m.upcomingLeaves
+                .map((l) => `${l.startDate} → ${l.endDate}`)
+                .join(', ')}) → **Loại trừ**`
+          )
+          .join('\n')
+      : '  - ✅ Không có thành viên nào nghỉ phép trong 2 ngày tới.';
+
+  // Separate Proven Performers (completionRate > 0%) from Unproven (0% completion)
+  const provenList =
+    Array.isArray(adv.provenRecommendees)
+      ? adv.provenRecommendees
+      : (adv.recommendedAssignees || []).filter(
+          (m) => (m.completedTasks > 0 || m.completionRate > 0) && !m.isUnproven
+        );
+
+  const unprovenList =
+    Array.isArray(adv.unprovenAvailable)
+      ? adv.unprovenAvailable
+      : (adv.allMembersWorkload || []).filter(
+          (m) =>
+            !m.hasApprovedLeaveNext2Days &&
+            !m.isCurrentUser &&
+            (m.completedTasks === 0 && (!m.completionRate || m.completionRate === 0))
+        );
+
+  const topProven = provenList.slice(0, 2);
+  let recLines = '';
+
+  if (topProven.length > 0) {
+    recLines = topProven
+      .map(
+        (m, idx) =>
+          `  ${idx + 1}. 🌟 **${m.userName}** *(Nhân sự hiệu suất cao)*\n` +
+          `     - **Hiệu suất thực chứng**: Tỷ lệ hoàn thành **${m.completionRate ?? 100}%** (${
+            m.completedTasks ?? 'Đã có'
+          } task hoàn thành${m.completedHardTasks ? `, gồm ${m.completedHardTasks} task Hard` : ''}) | Đúng hạn: **${m.onTimeRate}%**\n` +
+          `     - **Tải hiện tại**: **${m.inProgressTasks} in_progress**, **${m.todoTasks} todo**, Quá hạn: **${m.overdueTasks}**`
+      )
+      .join('\n');
+  } else if ((adv.recommendedAssignees || []).length > 0) {
+    recLines = adv.recommendedAssignees
+      .slice(0, 2)
+      .map(
+        (m, idx) =>
+          `  ${idx + 1}. 🌟 **${m.userName}** — Đang mở: **${m.inProgressTasks} in_progress**, **${m.todoTasks} todo**, Quá hạn: **${m.overdueTasks}** | Tỷ lệ đúng hạn: **${m.onTimeRate}%** (Hoàn thành: ${m.completionRate}%)`
+      )
+      .join('\n');
+  } else {
+    recLines = '  - Hiện tất cả thành viên đều đang bận hoặc có lịch nghỉ phép.';
+  }
+
+  const unprovenNotice =
+    unprovenList.length > 0 && topProven.length > 0
+      ? `\n\n⚠️ **Lưu ý lọc nhân sự chưa có lịch sử hoàn thành (Tỷ lệ 0% — Không ưu tiên giao việc Gấp/Hard)**:\n` +
+        unprovenList
+          .map(
+            (m) =>
+              `  - ℹ️ **${m.userName}**: Đang có ${m.inProgressTasks} task đang làm, ${m.todoTasks} chờ làm nhưng **tỷ lệ hoàn thành đang là 0% (0/${m.totalTasks || 0} task)** → Chỉ nên giao việc phụ hoặc kèm cặp, không giao việc khó/gấp.`
+          )
+          .join('\n')
+      : '';
+
+  const allLines = (adv.allMembersWorkload || [])
+    .map(
+      (m) =>
+        `• **${m.userName}**: Hoàn thành **${m.completionRate ?? 0}%** (${m.completedTasks ?? 0}/${m.totalTasks ?? 0}), đúng hạn **${m.onTimeRate ?? 0}%** | Đang làm: ${m.inProgressTasks}, Chờ làm: ${m.todoTasks}, Quá hạn: ${m.overdueTasks}${
+          m.hasApprovedLeaveNext2Days
+            ? ' *(Đang nghỉ phép)*'
+            : m.isUnproven
+              ? ' *(Chưa có task hoàn thành - 0%)*'
+              : ''
+        }`
+    )
+    .join('\n');
+
+  const bestCandidate = topProven[0] || (adv.recommendedAssignees || [])[0] || null;
+
+  const text =
+    `📊 **Phân tích Điều phối & Hiệu suất — Team ${adv.teamName}** *(Dữ liệu thời gian thực)*:\n\n` +
+    `**1. Kiểm tra lịch nghỉ phép trong 2 ngày tới:**\n${onLeaveLines}\n\n` +
+    `**2. Đề xuất ưu tiên số 1 (Lọc theo Hiệu suất hoàn thành & Tỷ lệ đúng hạn cao nhất):**\n${recLines}` +
+    `${unprovenNotice}\n\n` +
+    `**3. Bảng tổng hợp hiệu suất & tải công việc toàn team (${adv.totalMembers} thành viên):**\n${allLines}`;
+
+  const action = bestCandidate
+    ? {
+        type: 'CREATE_TASK_DRAFT',
+        summary: `Mở màn hình Giao việc cho ${bestCandidate.userName} (Hoàn thành ${bestCandidate.completionRate ?? 100}%, Đúng hạn ${bestCandidate.onTimeRate}%)`,
+        payload: {
+          assigneeId: bestCandidate.userId,
+          assigneeName: bestCandidate.userName,
+          difficulty: normMessage.includes('hard') || normMessage.includes('kho') ? 'hard' : 'medium',
+          priority: 'high'
+        }
+      }
+    : null;
+
+  return { text, action };
+};
+
+/**
+ * Composable Multi-Intent & Deep-Entity Local Copilot Engine
+ * Handles single queries, compound queries, specific task/subtask inspection,
+ * coreference ("task đó"), and manager approval inbox queries.
+ */
+const buildLocalAssistantReply = (message, context, history = []) => {
   const norm = normalizeVi(message);
-  const proposedAction = extractActionIntent(message, context);
+  const proposedAction = extractActionIntent(message, context, history);
   const suggestedQuestions = getRoleSuggestedQuestions(context.user.role);
 
+  // 1. Direct Chat-to-Action responses
   if (proposedAction?.type === 'LOG_TIME') {
     const p = proposedAction.payload;
     return {
@@ -327,6 +442,10 @@ const buildLocalAssistantReply = (message, context) => {
     };
   }
 
+  const sections = [];
+  let attachedAction = null;
+
+  // 2. Check if asking about Smart Workload Advisor / Team Assignment
   const isWorkloadQuery =
     norm.includes('giao cho ai') ||
     norm.includes('nen giao') ||
@@ -334,81 +453,97 @@ const buildLocalAssistantReply = (message, context) => {
     norm.includes('qua tai') ||
     norm.includes('tai cong viec') ||
     norm.includes('trong team') ||
+    norm.includes('hieu suat team') ||
     (norm.includes('hard') && norm.includes('task'));
 
   if (isWorkloadQuery) {
-    if (!context.teamWorkloadAdvisor) {
-      return {
-        reply:
-          'Tính năng **Trợ lý Điều phối & Gợi ý Giao việc (Smart Workload Advisor)** chỉ dành cho **Team Lead** hoặc **HR Manager** có quản lý đội nhóm.',
-        suggestedQuestions,
-        proposedAction: null
-      };
-    }
-
-    const adv = context.teamWorkloadAdvisor;
-    const onLeaveLines =
-      adv.membersOnLeaveNext2Days.length > 0
-        ? adv.membersOnLeaveNext2Days
-            .map(
-              (m) =>
-                `  - ❌ **${m.userName}**: Đang có lịch nghỉ phép đã duyệt (${m.upcomingLeaves
-                  .map((l) => `${l.startDate} → ${l.endDate}`)
-                  .join(', ')}) → **Loại trừ**`
-            )
-            .join('\n')
-        : '  - ✅ Không có thành viên nào nghỉ phép trong 2 ngày tới.';
-
-    const topRecs = adv.recommendedAssignees.slice(0, 2);
-    const recLines =
-      topRecs.length > 0
-        ? topRecs
-            .map(
-              (m, idx) =>
-                `  ${idx + 1}. 🌟 **${m.userName}** — Đang mở: **${m.inProgressTasks} in_progress**, **${m.todoTasks} todo**, Quá hạn: **${m.overdueTasks}** | Tỷ lệ đúng hạn: **${m.onTimeRate}%** (Hoàn thành: ${m.completionRate}%)`
-            )
-            .join('\n')
-        : '  - Hiện tất cả thành viên đều đang bận hoặc có lịch nghỉ phép.';
-
-    const allLines = adv.allMembersWorkload
-      .map(
-        (m) =>
-          `• **${m.userName}**: ${m.inProgressTasks} đang làm, ${m.todoTasks} chờ làm, ${m.overdueTasks} quá hạn, đúng hạn ${m.onTimeRate}%${
-            m.hasApprovedLeaveNext2Days ? ' *(Đang nghỉ phép)*' : ''
-          }`
-      )
-      .join('\n');
-
-    const bestCandidate = topRecs[0];
-
-    return {
-      reply:
-        `📊 **Phân tích Điều phối Công việc — Team ${adv.teamName}** *(Dữ liệu thời gian thực)*:\n\n` +
-        `**1. Kiểm tra lịch nghỉ phép trong 2 ngày tới:**\n${onLeaveLines}\n\n` +
-        `**2. Đề xuất nhân sự phù hợp nhất cho task gấp / độ khó cao:**\n${recLines}\n\n` +
-        `**3. Tổng quan tải công việc toàn team (${adv.totalMembers} thành viên):**\n${allLines}`,
-      suggestedQuestions,
-      proposedAction: bestCandidate
-        ? {
-            type: 'CREATE_TASK_DRAFT',
-            summary: `Mở màn hình Giao việc cho ${bestCandidate.userName}`,
-            payload: {
-              assigneeId: bestCandidate.userId,
-              assigneeName: bestCandidate.userName,
-              difficulty: norm.includes('hard') ? 'hard' : 'medium',
-              priority: 'high'
-            }
-          }
-        : null
-    };
+    const wl = formatWorkloadAdvisorSection(context, norm);
+    sections.push(wl.text);
+    if (wl.action) attachedAction = wl.action;
   }
 
-  if (
-    norm.includes('ngay phep') ||
-    norm.includes('phep nam') ||
-    norm.includes('con bao nhieu phep') ||
-    norm.includes('don nghi')
-  ) {
+  // 3. Check if asking about Manager Pending Approvals Inbox (Leaves & Tasks in_review)
+  const isApprovalsQuery =
+    norm.includes('cho duyet') ||
+    norm.includes('cho toi duyet') ||
+    norm.includes('can duyet') ||
+    norm.includes('in_review') ||
+    norm.includes('nghiem thu');
+
+  if (isApprovalsQuery && context.pendingApprovals) {
+    const app = context.pendingApprovals;
+    const leaveLines =
+      app.pendingLeaveCount > 0
+        ? app.pendingLeaves
+            .map(
+              (l) =>
+                `  - 🌴 **${l.employeeName}**: Xin nghỉ \`${l.type}\` (${l.startDate} → ${l.endDate}, **${l.numberOfDays} ngày**) — Lý do: *"${l.reason || 'Không ghi'}"*`
+            )
+            .join('\n')
+        : '  - ✅ Không có đơn nghỉ phép nào đang chờ bạn duyệt.';
+
+    const reviewLines =
+      app.tasksInReviewCount > 0
+        ? app.tasksInReview
+            .map(
+              (t) =>
+                `  - 📋 **[${t.priority.toUpperCase()}] ${t.title}** — Người thực hiện: **${t.assignees.join(', ')}** (Hạn: ${t.dueDate || 'N/A'})`
+            )
+            .join('\n')
+        : '  - ✅ Không có công việc nào đang chờ nghiệm thu (`in_review`).';
+
+    sections.push(
+      `📥 **Hộp thư Chờ Phê duyệt của Quản lý (${context.user.fullName})**:\n` +
+        `• **Đơn xin nghỉ phép chờ duyệt (${app.pendingLeaveCount} đơn)**:\n${leaveLines}\n` +
+        `• **Công việc chờ nghiệm thu \`in_review\` (${app.tasksInReviewCount} task)**:\n${reviewLines}`
+    );
+  }
+
+  // 4. Check if asking about a SPECIFIC Task (by fuzzy title match or "task đó" coreference)
+  const isSpecificTaskDetailQuery =
+    norm.includes('subtask') ||
+    norm.includes('dau viec') ||
+    norm.includes('bao nhieu phut') ||
+    norm.includes('log bao nhieu') ||
+    norm.includes('tien do task') ||
+    norm.includes('chi tiet task') ||
+    norm.includes('task do') ||
+    norm.includes('task nay') ||
+    norm.includes('viec do');
+
+  if (isSpecificTaskDetailQuery) {
+    const openTasks = context.personalTasks?.openTasksList || [];
+    const targetTask = resolveContextualEntity(message, history, openTasks, (t) => t.title);
+    if (targetTask) {
+      const pendingSubs =
+        targetTask.pendingSubTaskTitles && targetTask.pendingSubTaskTitles.length > 0
+          ? targetTask.pendingSubTaskTitles.map((s, i) => `  ${i + 1}. ☐ ${s}`).join('\n')
+          : '  - ✅ Tất cả subtasks đã hoàn thành hoặc chưa chia subtask.';
+      const blockText = targetTask.isBlocked
+        ? `⛔ Đang bị chặn bởi: **${targetTask.blockedByTitles.join(', ')}**`
+        : '✅ Không bị chặn bởi Dependency nào';
+
+      sections.push(
+        `🔍 **Chi tiết Công việc: "${targetTask.title}"**:\n` +
+          `• **Trạng thái**: \`${targetTask.status}\` | **Tiến độ**: **${targetTask.progress}%** | **Ưu tiên**: ${targetTask.priority.toUpperCase()} (${targetTask.difficulty})\n` +
+          `• **Hạn chót**: **${targetTask.dueDate || 'Chưa đặt'}**${targetTask.isOverdue ? ' ⚠️ **(ĐANG QUÁ HẠN)**' : ''}\n` +
+          `• **Thời gian làm việc**: Đã log **${targetTask.actualMinutes} phút** / Ước lượng: **${targetTask.estimatedMinutes ?? 'Chưa đặt'} phút**\n` +
+          `• **Phụ thuộc (Dependencies)**: ${blockText}\n` +
+          `• **Subtasks (${targetTask.subTasksSummary} hoàn thành — các đầu việc còn lại)**:\n${pendingSubs}`
+      );
+    }
+  }
+
+  // 5. Check if asking about Personal Leave Balance
+  const isLeaveQuery =
+    (norm.includes('ngay phep') ||
+      norm.includes('phep nam') ||
+      norm.includes('con bao nhieu phep') ||
+      norm.includes('quy phep') ||
+      (norm.includes('don nghi') && !isApprovalsQuery)) &&
+    !isWorkloadQuery;
+
+  if (isLeaveQuery) {
     const lv = context.personalLeaves;
     const pendingText =
       lv.pendingCount > 0
@@ -421,51 +556,49 @@ const buildLocalAssistantReply = (message, context) => {
             .join('\n')
         : '\n• **Đơn đang chờ duyệt**: Không có đơn nào đang chờ.';
 
-    return {
-      reply:
-        `🌴 **Thông tin Quỹ Nghỉ phép năm ${lv.year} của ${context.user.fullName}**:\n` +
+    sections.push(
+      `🌴 **Thông tin Quỹ Nghỉ phép năm ${lv.year} của ${context.user.fullName}**:\n` +
         `• **Tổng quỹ phép năm**: ${lv.balance.total} ngày\n` +
         `• **Đã sử dụng**: ${lv.balance.used} ngày\n` +
         `• **Số ngày phép còn lại**: **${lv.balance.remaining} ngày**` +
-        pendingText,
-      suggestedQuestions,
-      proposedAction: null
-    };
+        pendingText
+    );
   }
 
-  if (
-    norm.includes('di muon') ||
-    norm.includes('du cong') ||
-    norm.includes('cham cong') ||
-    norm.includes('gio lam') ||
-    norm.includes('diem danh')
-  ) {
-    if (
-      norm.includes('gps') ||
-      norm.includes('ban kinh') ||
-      norm.includes('quy dinh') ||
-      norm.includes('van phong') ||
-      norm.includes('dia chi')
-    ) {
-      const off = context.officePolicy;
-      if (!off) {
-        return {
-          reply: 'Hiện tại hệ thống chưa cấu hình văn phòng chấm công GPS đang hoạt động (Active Office).',
-          suggestedQuestions,
-          proposedAction: null
-        };
-      }
-      return {
-        reply:
-          `📍 **Quy định Chấm công GPS Văn phòng (${off.name})**:\n` +
+  // 6. Check if asking about Office GPS Policy
+  const isGpsQuery =
+    norm.includes('gps') ||
+    norm.includes('ban kinh') ||
+    norm.includes('quy dinh') ||
+    norm.includes('van phong') ||
+    norm.includes('dia chi');
+
+  if (isGpsQuery) {
+    const off = context.officePolicy;
+    if (!off) {
+      sections.push(
+        'Hiện tại hệ thống chưa cấu hình văn phòng chấm công GPS đang hoạt động (Active Office).'
+      );
+    } else {
+      sections.push(
+        `📍 **Quy định Chấm công GPS Văn phòng (${off.name})**:\n` +
           `• **Địa chỉ**: ${off.address}\n` +
           `• **Bán kính cho phép Check-in/Check-out**: **${off.radiusMeters} mét** tính từ tâm tọa độ (${off.coordinates?.lat}, ${off.coordinates?.lng})\n` +
-          `• **Giờ làm việc tiêu chuẩn**: **${off.workingHours.start} – ${off.workingHours.end}** (Check-in sau ${off.workingHours.start} sẽ tính là đi muộn \`late\`).`,
-        suggestedQuestions,
-        proposedAction: null
-      };
+          `• **Giờ làm việc tiêu chuẩn**: **${off.workingHours.start} – ${off.workingHours.end}** (Check-in sau ${off.workingHours.start} sẽ tính là đi muộn \`late\`).`
+      );
     }
+  }
 
+  // 7. Check if asking about Monthly Attendance & Late Days
+  const isAttendanceQuery =
+    (norm.includes('di muon') ||
+      norm.includes('du cong') ||
+      norm.includes('cham cong') ||
+      norm.includes('gio lam') ||
+      norm.includes('diem danh')) &&
+    !isGpsQuery;
+
+  if (isAttendanceQuery) {
     const att = context.personalAttendance;
     const stats = att.monthStats;
     const todayStatus = att.today
@@ -481,79 +614,67 @@ const buildLocalAssistantReply = (message, context) => {
             .join('\n')
         : '  - 🎉 Tuyệt vời! Tháng này bạn không đi muộn ngày nào.';
 
-    return {
-      reply:
-        `🕒 **Tổng hợp Chấm công Tháng ${att.monthLabel} của ${context.user.fullName}**:\n` +
+    sections.push(
+      `🕒 **Tổng hợp Chấm công Tháng ${att.monthLabel} của ${context.user.fullName}**:\n` +
         `• **Hôm nay (${context.todayDate})**: ${todayStatus}\n` +
         `• **Số ngày có mặt**: **${stats.presentDays + stats.lateDays}/${stats.totalDays}** ngày làm việc (Đúng giờ: ${stats.presentDays}, Đi muộn: **${stats.lateDays}**, Vắng: ${stats.absentDays})\n` +
         `• **Tổng số giờ làm việc**: **${stats.totalWorkHours} giờ** (Trung bình ${stats.averageWorkHours} giờ/ngày)\n` +
-        `• **Chi tiết các ngày đi muộn trong tháng**:\n${lateList}`,
-      suggestedQuestions,
-      proposedAction: null
-    };
+        `• **Chi tiết các ngày đi muộn trong tháng**:\n${lateList}`
+    );
   }
 
-  if (
-    norm.includes('gps') ||
-    norm.includes('ban kinh') ||
-    norm.includes('quy dinh') ||
-    norm.includes('van phong')
-  ) {
-    const off = context.officePolicy;
-    if (!off) {
-      return {
-        reply: 'Hiện tại hệ thống chưa có cấu hình văn phòng GPS đang hoạt động.',
-        suggestedQuestions,
-        proposedAction: null
-      };
+  // 8. Check if asking about Priority Tasks / Personal Tasks (or default fallback when no section matched)
+  const isPriorityTaskQuery =
+    norm.includes('uu tien') ||
+    norm.includes('task nao truoc') ||
+    norm.includes('cong viec cua toi') ||
+    norm.includes('task cua toi') ||
+    norm.includes('qua han') ||
+    sections.length === 0;
+
+  if (isPriorityTaskQuery && !isWorkloadQuery) {
+    const pt = context.personalTasks;
+    if (pt.totalOpen === 0) {
+      sections.push(
+        `Xin chào **${context.user.fullName}**! Hiện tại bạn **không có công việc (task) nào đang mở hoặc quá hạn** (Đã hoàn thành: **${pt.completedCount || 0} task**, tỷ lệ đúng hạn: **${pt.onTimeRate ?? 100}%**). Bạn có thể hỏi tôi về ngày phép, bảng chấm công tháng ${context.personalAttendance.monthLabel}, hoặc quy định văn phòng nhé!`
+      );
+    } else {
+      const topLines = pt.topPriorityTasks
+        .map(
+          (t, idx) =>
+            `${idx + 1}. **[${t.priority.toUpperCase()}] ${t.title}**\n` +
+            `   - Trạng thái: \`${t.status}\` | Tiến độ: ${t.progress}% (Subtasks: ${t.subTasksSummary}) | Hạn chót: **${t.dueDate || 'Chưa đặt'}**${
+              t.isOverdue ? ' ⚠️ **(QUÁ HẠN)**' : ''
+            }`
+        )
+        .join('\n');
+
+      const blockedTasks = pt.openTasksList.filter((t) => t.isBlocked);
+      const blockedNote =
+        blockedTasks.length > 0
+          ? `\n\n⛔ **Lưu ý các task đang bị chặn bởi Dependencies (${blockedTasks.length} task)**:\n` +
+            blockedTasks
+              .map((t) => `• **${t.title}** (Đang chờ: *${t.blockedByTitles.join(', ')}*)`)
+              .join('\n')
+          : '';
+
+      const perfSummary =
+        pt.completedCount !== undefined
+          ? ` | Đã hoàn thành: ${pt.completedCount} task (${pt.completionRate || 0}%, đúng hạn ${pt.onTimeRate || 0}%)`
+          : '';
+
+      sections.push(
+        `📌 **Thứ tự Ưu tiên Công việc của ${context.user.fullName}** *(Đang mở: ${pt.totalOpen} task | Quá hạn: ${pt.overdueCount} | Đang làm: ${pt.inProgressCount}${perfSummary})*:\n\n` +
+          `Dựa trên hạn chót (\`dueDate\`), mức độ ưu tiên (\`priority\`) và kiểm tra phụ thuộc (\`dependencies\`), bạn nên tập trung làm trước:\n` +
+          `${topLines}${blockedNote}`
+      );
     }
-    return {
-      reply:
-        `📍 **Quy định Chấm công GPS Văn phòng (${off.name})**:\n` +
-        `• **Địa chỉ**: ${off.address}\n` +
-        `• **Bán kính cho phép Check-in**: **${off.radiusMeters} mét** quanh tọa độ (${off.coordinates?.lat}, ${off.coordinates?.lng})\n` +
-        `• **Khung giờ làm việc**: **${off.workingHours.start} – ${off.workingHours.end}**.`,
-      suggestedQuestions,
-      proposedAction: null
-    };
   }
-
-  const pt = context.personalTasks;
-  if (pt.totalOpen === 0) {
-    return {
-      reply:
-        `Xin chào **${context.user.fullName}**! Hiện tại bạn **không có công việc (task) nào đang mở hoặc quá hạn**. Bạn có thể hỏi tôi về ngày phép, bảng chấm công tháng ${context.personalAttendance.monthLabel}, hoặc quy định văn phòng nhé!`,
-      suggestedQuestions,
-      proposedAction: null
-    };
-  }
-
-  const topLines = pt.topPriorityTasks
-    .map(
-      (t, idx) =>
-        `${idx + 1}. **[${t.priority.toUpperCase()}] ${t.title}**\n` +
-        `   - Trạng thái: \`${t.status}\` | Tiến độ: ${t.progress}% | Hạn chót: **${t.dueDate || 'Chưa đặt'}**${
-          t.isOverdue ? ' ⚠️ **(QUÁ HẠN)**' : ''
-        }`
-    )
-    .join('\n');
-
-  const blockedTasks = pt.openTasksList.filter((t) => t.isBlocked);
-  const blockedNote =
-    blockedTasks.length > 0
-      ? `\n\n⛔ **Lưu ý các task đang bị chặn bởi Dependencies (${blockedTasks.length} task)**:\n` +
-        blockedTasks
-          .map((t) => `• **${t.title}** (Đang chờ: *${t.blockedByTitles.join(', ')}*)`)
-          .join('\n')
-      : '';
 
   return {
-    reply:
-      `📌 **Thứ tự Ưu tiên Công việc của ${context.user.fullName}** *(Đang mở: ${pt.totalOpen} task | Quá hạn: ${pt.overdueCount} | Đang làm: ${pt.inProgressCount})*:\n\n` +
-      `Dựa trên hạn chót (\`dueDate\`), mức độ ưu tiên (\`priority\`) và kiểm tra phụ thuộc (\`dependencies\`), bạn nên tập trung làm trước:\n` +
-      `${topLines}${blockedNote}`,
+    reply: sections.join('\n\n---\n\n'),
     suggestedQuestions,
-    proposedAction: null
+    proposedAction: attachedAction
   };
 };
 
@@ -561,23 +682,28 @@ const buildLocalAssistantReply = (message, context) => {
  * Main entry point for Chat Assistant (/api/ai/assistant)
  */
 const generateAssistantReply = async ({ user, message, history = [] }) => {
-  const { buildUserCopilotContext } = require('./ai-context.service');
+  const {
+    buildUserCopilotContext,
+    buildCompactContextDigest
+  } = require('./ai-context.service');
   const context = await buildUserCopilotContext(user);
 
-  const detectedAction = extractActionIntent(message, context);
-  const localBaseline = buildLocalAssistantReply(message, context);
+  const detectedAction = extractActionIntent(message, context, history);
+  const localBaseline = buildLocalAssistantReply(message, context, history);
+  const multiDomainDigest = buildCompactContextDigest(context);
 
   const systemPrompt =
-    `Bạn là Trợ lý ảo Nội bộ AI HR & Task Copilot. Dựa vào BÁO CÁO DỮ LIỆU THẬT TỪ MONGODB dưới đây của ${context.user.fullName} (role: ${context.user.role}), hãy trả lời câu hỏi của người dùng bằng tiếng Việt tự nhiên, giữ nguyên chính xác 100% số liệu và tên task/nhân sự. Trả về JSON đúng mẫu: {"reply":"...","suggestedQuestions":["..."]}.`;
+    `Bạn là Trợ lý ảo Nội bộ AI HR & Task Copilot. Dựa vào TỔNG HỢP DỮ LIỆU MONGODB và PHÂN TÍCH CHUẨN dưới đây của ${context.user.fullName} (role: ${context.user.role}), hãy trả lời câu hỏi của người dùng bằng tiếng Việt chuyên nghiệp, giữ chính xác 100% các con số, tên task và tên nhân sự. Khi gợi ý giao việc gấp/Hard, BẮT BUỘC ưu tiên nhân sự có tỷ lệ hoàn thành và đúng hạn cao (>0%), không đề xuất người có tỷ lệ hoàn thành 0% lên đầu. Trả về JSON đúng mẫu: {"reply":"...","suggestedQuestions":["..."]}.`;
 
   const recentHistoryText = (history || [])
-    .slice(-2)
+    .slice(-4)
     .map((h) => `${h.role === 'assistant' ? 'AI' : 'User'}: ${h.content}`)
     .join('\n');
 
   const userPrompt =
-    `BÁO CÁO DỮ LIỆU THẬT TỪ MONGODB:\n${localBaseline.reply}\n\n` +
-    (recentHistoryText ? `HỘI THOẠI GẦN ĐÂY:\n${recentHistoryText}\n\n` : '') +
+    `TỔNG HỢP DỮ LIỆU MONGODB (6 MẢNG):\n${multiDomainDigest}\n\n` +
+    `PHÂN TÍCH CHUẨN ĐỐI CHIẾU:\n${localBaseline.reply}\n\n` +
+    (recentHistoryText ? `LỊCH SỬ HỘI THOẠI GẦN ĐÂY:\n${recentHistoryText}\n\n` : '') +
     `CÂU HỎI CỦA NGƯỜI DÙNG: "${message}"`;
 
   const result = await invokeStructuredAI({
@@ -589,15 +715,16 @@ const generateAssistantReply = async ({ user, message, history = [] }) => {
 
   const payload = result.data || localBaseline;
   const replyText =
-    typeof payload.reply === 'string' && payload.reply.trim().length > 10
+    typeof payload.reply === 'string' && payload.reply.trim().length > 25
       ? payload.reply.trim()
       : localBaseline.reply;
 
   const finalAction =
     detectedAction ||
+    localBaseline.proposedAction ||
     (payload.proposedAction && payload.proposedAction.type !== 'NONE' && payload.proposedAction.payload
       ? payload.proposedAction
-      : localBaseline.proposedAction);
+      : null);
 
   const finalSuggestions =
     Array.isArray(payload.suggestedQuestions) && payload.suggestedQuestions.length > 0
@@ -931,6 +1058,6 @@ module.exports = {
   extractActionIntent,
   buildLocalAssistantReply,
   buildLocalTaskBreakdown,
-  buildLocalTaskSummary
+  buildLocalTaskSummary,
+  formatWorkloadAdvisorSection
 };
-
