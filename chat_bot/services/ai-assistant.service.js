@@ -14,6 +14,11 @@ const {
   formatDateISO,
   getRoleSuggestedQuestions
 } = require('../utils/vietnamese-nlp.utils');
+const {
+  predictIntents,
+  retrieveFewShotExamples,
+  buildSystemSopReply
+} = require('./ai-knowledge.service');
 
 let ollamaStatusCache = { available: null, checkedAt: 0 };
 
@@ -93,7 +98,7 @@ const callGeminiJSON = async (systemPrompt, userPrompt, schema) => {
 
 /**
  * Execute LLM call with automatic fallback chain:
- * 1. Ollama (qwen2.5:3b)
+ * 1. Ollama (qwen2.5:3b / hr-task-copilot)
  * 2. Gemini (if GEMINI_API_KEY is set)
  * 3. Smart Local Vietnamese NLP Engine (Zero-latency, 100% reliable)
  */
@@ -131,7 +136,7 @@ const invokeStructuredAI = async ({ systemPrompt, userPrompt, schema, fallbackFn
 
   return {
     data: fallbackFn(),
-    provider: 'smart-local-copilot'
+    provider: 'smart-local-copilot-v3'
   };
 };
 
@@ -149,7 +154,8 @@ const extractActionIntent = (message, context, history = []) => {
       norm.includes('ghi nhan') ||
       norm.includes('cap nhat thoi gian') ||
       norm.includes('cham gio')) &&
-    (norm.includes('phut') || norm.includes('gio') || norm.includes('min') || /\b\d+\s*(p|m|h)\b/.test(norm));
+    (norm.includes('phut') || norm.includes('gio') || norm.includes('min') || /\b\d+\s*(p|m|h)\b/.test(norm)) &&
+    !norm.includes('tong cong bao nhieu');
 
   if (isLogTime) {
     let minutes = 60;
@@ -170,7 +176,6 @@ const extractActionIntent = (message, context, history = []) => {
       note = noteMatch[1].trim();
     }
 
-    // Strip note & command prefix before fuzzy matching task title
     const messageWithoutNote = noteMatch ? raw.slice(0, noteMatch.index) : raw;
     const openTasks = context.personalTasks?.openTasksList || [];
 
@@ -205,12 +210,18 @@ const extractActionIntent = (message, context, history = []) => {
       norm.includes('nop don') ||
       norm.includes('xin nghi') ||
       norm.includes('dang ky nghi') ||
-      (norm.includes('nghi phep') && (norm.includes('ngay mai') || norm.includes('hom nay') || norm.includes('tu ngay') || norm.includes('ly do')))) &&
+      (norm.includes('nghi phep') &&
+        (norm.includes('ngay mai') ||
+          norm.includes('hom nay') ||
+          norm.includes('tu ngay') ||
+          norm.includes('ly do')))) &&
     !norm.includes('con bao nhieu') &&
     !norm.includes('may ngay') &&
     !norm.includes('kiem tra') &&
     !norm.includes('ai dang') &&
-    !norm.includes('cho toi duyet');
+    !norm.includes('cho toi duyet') &&
+    !norm.includes('quy trinh') &&
+    !norm.includes('2 tuan toi');
 
   if (isCreateLeave) {
     let leaveType = 'personal';
@@ -284,22 +295,12 @@ const extractActionIntent = (message, context, history = []) => {
 };
 
 /**
- * Format Smart Workload Advisor section with Experience-Weighted Tiered Filtering
- * (Prioritizes Proven High-Completion / High-OnTime Performers over 0% Unproven accounts)
+ * Format Single-Team Workload Detail Block
  */
-const formatWorkloadAdvisorSection = (context, normMessage) => {
-  if (!context.teamWorkloadAdvisor) {
-    return {
-      text: 'Tính năng **Trợ lý Điều phối & Gợi ý Giao việc (Smart Workload Advisor)** chỉ dành cho **Team Lead** hoặc **HR Manager** có quản lý đội nhóm.',
-      action: null
-    };
-  }
-
-  const adv = context.teamWorkloadAdvisor;
-
+const formatSingleTeamDetailBlock = (tw, normMessage) => {
   const onLeaveLines =
-    adv.membersOnLeaveNext2Days.length > 0
-      ? adv.membersOnLeaveNext2Days
+    (tw.membersOnLeaveNext2Days || []).length > 0
+      ? tw.membersOnLeaveNext2Days
           .map(
             (m) =>
               `  - ❌ **${m.userName}**: Đang có lịch nghỉ phép đã duyệt (${m.upcomingLeaves
@@ -309,22 +310,22 @@ const formatWorkloadAdvisorSection = (context, normMessage) => {
           .join('\n')
       : '  - ✅ Không có thành viên nào nghỉ phép trong 2 ngày tới.';
 
-  // Separate Proven Performers (completionRate > 0%) from Unproven (0% completion)
   const provenList =
-    Array.isArray(adv.provenRecommendees)
-      ? adv.provenRecommendees
-      : (adv.recommendedAssignees || []).filter(
+    Array.isArray(tw.provenRecommendees)
+      ? tw.provenRecommendees
+      : (tw.recommendedAssignees || []).filter(
           (m) => (m.completedTasks > 0 || m.completionRate > 0) && !m.isUnproven
         );
 
   const unprovenList =
-    Array.isArray(adv.unprovenAvailable)
-      ? adv.unprovenAvailable
-      : (adv.allMembersWorkload || []).filter(
+    Array.isArray(tw.unprovenAvailable)
+      ? tw.unprovenAvailable
+      : (tw.allMembersWorkload || []).filter(
           (m) =>
             !m.hasApprovedLeaveNext2Days &&
             !m.isCurrentUser &&
-            (m.completedTasks === 0 && (!m.completionRate || m.completionRate === 0))
+            m.completedTasks === 0 &&
+            (!m.completionRate || m.completionRate === 0)
         );
 
   const topProven = provenList.slice(0, 2);
@@ -341,8 +342,8 @@ const formatWorkloadAdvisorSection = (context, normMessage) => {
           `     - **Tải hiện tại**: **${m.inProgressTasks} in_progress**, **${m.todoTasks} todo**, Quá hạn: **${m.overdueTasks}**`
       )
       .join('\n');
-  } else if ((adv.recommendedAssignees || []).length > 0) {
-    recLines = adv.recommendedAssignees
+  } else if ((tw.recommendedAssignees || []).length > 0) {
+    recLines = tw.recommendedAssignees
       .slice(0, 2)
       .map(
         (m, idx) =>
@@ -364,7 +365,7 @@ const formatWorkloadAdvisorSection = (context, normMessage) => {
           .join('\n')
       : '';
 
-  const allLines = (adv.allMembersWorkload || [])
+  const allLines = (tw.allMembersWorkload || [])
     .map(
       (m) =>
         `• **${m.userName}**: Hoàn thành **${m.completionRate ?? 0}%** (${m.completedTasks ?? 0}/${m.totalTasks ?? 0}), đúng hạn **${m.onTimeRate ?? 0}%** | Đang làm: ${m.inProgressTasks}, Chờ làm: ${m.todoTasks}, Quá hạn: ${m.overdueTasks}${
@@ -377,20 +378,22 @@ const formatWorkloadAdvisorSection = (context, normMessage) => {
     )
     .join('\n');
 
-  const bestCandidate = topProven[0] || (adv.recommendedAssignees || [])[0] || null;
+  const bestCandidate = topProven[0] || (tw.recommendedAssignees || [])[0] || null;
 
   const text =
-    `📊 **Phân tích Điều phối & Hiệu suất — Team ${adv.teamName}** *(Dữ liệu thời gian thực)*:\n\n` +
+    `📊 **Phân tích Điều phối & Hiệu suất — Team ${tw.teamName}** *(Dữ liệu thời gian thực)*:\n\n` +
     `**1. Kiểm tra lịch nghỉ phép trong 2 ngày tới:**\n${onLeaveLines}\n\n` +
     `**2. Đề xuất ưu tiên số 1 (Lọc theo Hiệu suất hoàn thành & Tỷ lệ đúng hạn cao nhất):**\n${recLines}` +
     `${unprovenNotice}\n\n` +
-    `**3. Bảng tổng hợp hiệu suất & tải công việc toàn team (${adv.totalMembers} thành viên):**\n${allLines}`;
+    `**3. Bảng tổng hợp hiệu suất & tải công việc toàn team (${tw.totalMembers} thành viên):**\n${allLines}`;
 
   const action = bestCandidate
     ? {
         type: 'CREATE_TASK_DRAFT',
-        summary: `Mở màn hình Giao việc cho ${bestCandidate.userName} (Hoàn thành ${bestCandidate.completionRate ?? 100}%, Đúng hạn ${bestCandidate.onTimeRate}%)`,
+        summary: `Mở màn hình Giao việc cho ${bestCandidate.userName} (${tw.teamName} — Hoàn thành ${bestCandidate.completionRate ?? 100}%, Đúng hạn ${bestCandidate.onTimeRate}%)`,
         payload: {
+          teamId: tw.teamId,
+          teamName: tw.teamName,
           assigneeId: bestCandidate.userId,
           assigneeName: bestCandidate.userName,
           difficulty: normMessage.includes('hard') || normMessage.includes('kho') ? 'hard' : 'medium',
@@ -403,9 +406,451 @@ const formatWorkloadAdvisorSection = (context, normMessage) => {
 };
 
 /**
- * Composable Multi-Intent & Deep-Entity Local Copilot Engine
- * Handles single queries, compound queries, specific task/subtask inspection,
- * coreference ("task đó"), and manager approval inbox queries.
+ * Format Multi-Team Smart Workload Advisor Section
+ * - If user specifies a team name in message -> renders that specific team's deep breakdown.
+ * - If user manages multiple teams (teamsWorkload.length > 1) and asks generally ->
+ *   renders Top Proven Performers for EVERY managed team + Cross-Team #1 Recommendation!
+ */
+const formatWorkloadAdvisorSection = (context, normMessage, rawMessage = '') => {
+  if (!context.teamWorkloadAdvisor) {
+    return {
+      text: 'Tính năng **Trợ lý Điều phối & Gợi ý Giao việc (Smart Workload Advisor)** chỉ dành cho **Team Lead** hoặc **HR Manager** có quản lý đội nhóm.',
+      action: null
+    };
+  }
+
+  const adv = context.teamWorkloadAdvisor;
+  const teamsList =
+    Array.isArray(adv.teamsWorkload) && adv.teamsWorkload.length > 0
+      ? adv.teamsWorkload
+      : [adv];
+
+  // Check if user explicitly asked about a specific team by name
+  if (teamsList.length > 1) {
+    const matchedTeam = fuzzyMatchEntity(
+      rawMessage || normMessage,
+      teamsList,
+      (t) => t.teamName,
+      0.45
+    );
+    if (matchedTeam.item) {
+      return formatSingleTeamDetailBlock(matchedTeam.item, normMessage);
+    }
+  }
+
+  // If only 1 team is managed, render the detailed single-team view
+  if (teamsList.length === 1) {
+    return formatSingleTeamDetailBlock(teamsList[0], normMessage);
+  }
+
+  // MULTI-TEAM VIEW: Render top performers for EVERY managed team!
+  const perTeamBlocks = teamsList.map((tw, idx) => {
+    const proven = Array.isArray(tw.provenRecommendees)
+      ? tw.provenRecommendees
+      : (tw.recommendedAssignees || []).filter(
+          (m) => (m.completedTasks > 0 || m.completionRate > 0) && !m.isUnproven
+        );
+    const unproven = Array.isArray(tw.unprovenAvailable)
+      ? tw.unprovenAvailable
+      : (tw.allMembersWorkload || []).filter(
+          (m) =>
+            !m.hasApprovedLeaveNext2Days &&
+            !m.isCurrentUser &&
+            m.completedTasks === 0 &&
+            (!m.completionRate || m.completionRate === 0)
+        );
+    const onLeave = tw.membersOnLeaveNext2Days || [];
+
+    const topLines =
+      proven.length > 0
+        ? proven
+            .slice(0, 2)
+            .map(
+              (m, pIdx) =>
+                `   ${pIdx + 1}. 🌟 **${m.userName}** — Hoàn thành: **${m.completionRate}%** (${m.completedTasks}/${m.totalTasks} task${
+                  m.completedHardTasks ? `, ${m.completedHardTasks} Hard` : ''
+                }) | Đúng hạn: **${m.onTimeRate}%** | Đang làm: **${m.inProgressTasks} in_progress**, **${m.todoTasks} todo**, Quá hạn: **${m.overdueTasks}**`
+            )
+            .join('\n')
+        : '   - ⚠️ Team này hiện chưa có nhân sự có lịch sử hoàn thành (>0%) đang rảnh.';
+
+    const leaveNote =
+      onLeave.length > 0
+        ? `\n   - ❌ *Đang nghỉ phép 2 ngày tới (Loại trừ)*: ${onLeave.map((l) => l.userName).join(', ')}`
+        : '';
+
+    const unprovenNote =
+      unproven.length > 0
+        ? `\n   - ℹ️ *Nhân sự chưa có task hoàn thành (0% — Không ưu tiên việc Gấp/Hard)*: ${unproven
+            .map((u) => `${u.userName} (0/${u.totalTasks || 0})`)
+            .join(', ')}`
+        : '';
+
+    return (
+      `🏢 **${idx + 1}. Team ${tw.teamName}** *(${tw.totalMembers} thành viên | Hiệu suất Team: Hoàn thành ${
+        tw.teamMetrics?.completionRate ?? 0
+      }%, Đúng hạn ${tw.teamMetrics?.onTimeRate ?? 0}%)*:\n` +
+      `${topLines}${leaveNote}${unprovenNote}`
+    );
+  });
+
+  // Cross-Team Top Pick
+  const allProvenAcrossTeams =
+    Array.isArray(adv.crossTeamProvenRecommendees) && adv.crossTeamProvenRecommendees.length > 0
+      ? adv.crossTeamProvenRecommendees
+      : teamsList
+          .flatMap((tw) =>
+            (tw.provenRecommendees || []).map((m) => ({
+              ...m,
+              teamId: tw.teamId,
+              teamName: tw.teamName
+            }))
+          )
+          .sort((a, b) => (b.suitabilityScore || 0) - (a.suitabilityScore || 0));
+
+  const bestOverall = allProvenAcrossTeams[0] || (adv.recommendedAssignees || [])[0] || null;
+  const secondOverall = allProvenAcrossTeams[1] || null;
+
+  const crossTeamSummary = bestOverall
+    ? `🏆 **Đề xuất Tối ưu Nhất Toàn Hệ thống (Top Pick liên Team)**:\n` +
+      `• Ứng viên số 1: **${bestOverall.userName}** *(Thuộc **Team ${bestOverall.teamName || adv.teamName}**)* — Tỷ lệ hoàn thành **${bestOverall.completionRate}%**, Đúng hạn **${bestOverall.onTimeRate}%**, hiện chỉ có **${bestOverall.inProgressTasks} task đang làm** và **0 task quá hạn**.` +
+      (secondOverall
+        ? `\n• Ứng viên số 2: **${secondOverall.userName}** *(Thuộc **Team ${secondOverall.teamName || ''}**)* — Hoàn thành **${secondOverall.completionRate}%**, Đúng hạn **${secondOverall.onTimeRate}%**.`
+        : '')
+    : 'Hiện tại các Team chưa có ứng viên phù hợp sẵn sàng nhận việc gấp.';
+
+  const text =
+    `📊 **Phân tích Điều phối Giao việc Gấp Đa Team (${teamsList.length} Team đang quản lý)** *(Dữ liệu thời gian thực)*:\n\n` +
+    `Dưới đây là danh sách **Nhân sự có hiệu suất hoàn thành & đúng hạn cao nhất của TỪNG TEAM** (đã loại trừ người nghỉ phép và lọc riêng người tỷ lệ 0%):\n\n` +
+    `${perTeamBlocks.join('\n\n')}\n\n` +
+    `---\n${crossTeamSummary}`;
+
+  const action = bestOverall
+    ? {
+        type: 'CREATE_TASK_DRAFT',
+        summary: `Giao việc cho ${bestOverall.userName} (Team ${bestOverall.teamName || adv.teamName} — Hoàn thành ${bestOverall.completionRate}%, Đúng hạn ${bestOverall.onTimeRate}%)`,
+        payload: {
+          teamId: bestOverall.teamId || adv.teamId,
+          teamName: bestOverall.teamName || adv.teamName,
+          assigneeId: bestOverall.userId,
+          assigneeName: bestOverall.userName,
+          difficulty: normMessage.includes('hard') || normMessage.includes('kho') ? 'hard' : 'medium',
+          priority: 'high'
+        }
+      }
+    : null;
+
+  return { text, action };
+};
+
+/**
+ * Format Cross-Team Performance Comparison Section
+ */
+const formatTeamComparisonSection = (context) => {
+  const adv = context.teamWorkloadAdvisor;
+  if (!adv) {
+    return 'Tính năng **So sánh Hiệu suất giữa các Team** chỉ dành cho **Team Lead** hoặc **HR Manager**.';
+  }
+  const teamsList =
+    Array.isArray(adv.teamsWorkload) && adv.teamsWorkload.length > 0
+      ? adv.teamsWorkload
+      : [adv];
+
+  const rankedTeams = [...teamsList].sort((a, b) => {
+    const scoreA =
+      (a.teamMetrics?.completionRate || 0) * 0.5 +
+      (a.teamMetrics?.onTimeRate || 0) * 0.5 -
+      (a.teamMetrics?.overdueTasks || 0) * 10;
+    const scoreB =
+      (b.teamMetrics?.completionRate || 0) * 0.5 +
+      (b.teamMetrics?.onTimeRate || 0) * 0.5 -
+      (b.teamMetrics?.overdueTasks || 0) * 10;
+    return scoreB - scoreA;
+  });
+
+  const rows = rankedTeams
+    .map(
+      (tw, idx) =>
+        `${idx + 1}. 🏢 **Team ${tw.teamName}** (${tw.totalMembers} thành viên):\n` +
+        `   - **Tỷ lệ hoàn thành**: **${tw.teamMetrics?.completionRate ?? 0}%** (${tw.teamMetrics?.completedTasks ?? 0}/${tw.teamMetrics?.totalTasks ?? 0} task) | **Tỷ lệ đúng hạn**: **${tw.teamMetrics?.onTimeRate ?? 0}%**\n` +
+        `   - **Đang mở**: ${tw.teamMetrics?.activeTasks ?? 0} task | **Quá hạn**: **${tw.teamMetrics?.overdueTasks ?? 0} task**`
+    )
+    .join('\n');
+
+  const bestTeam = rankedTeams[0];
+  const mostOverdueTeam = [...teamsList].sort(
+    (a, b) => (b.teamMetrics?.overdueTasks || 0) - (a.teamMetrics?.overdueTasks || 0)
+  )[0];
+
+  return (
+    `🏆 **Bảng Xếp hạng & So sánh Hiệu suất giữa các Team (${teamsList.length} Team)**:\n\n` +
+    `${rows}\n\n` +
+    `💡 **Nhận xét tổng quan**:\n` +
+    `• Team hiệu quả nhất hiện tại: **${bestTeam?.teamName}** (Hoàn thành ${bestTeam?.teamMetrics?.completionRate ?? 0}%, Đúng hạn ${bestTeam?.teamMetrics?.onTimeRate ?? 0}%).\n` +
+    (mostOverdueTeam && (mostOverdueTeam.teamMetrics?.overdueTasks || 0) > 0
+      ? `• Team cần hỗ trợ giải quyết việc trễ hạn: **${mostOverdueTeam.teamName}** (Đang có **${mostOverdueTeam.teamMetrics.overdueTasks} task quá hạn**).`
+      : `• Tuyệt vời! Không có Team nào đang bị tồn đọng nhiều công việc quá hạn.`)
+  );
+};
+
+/**
+ * Format Employee 360° Profile & Performance Lookup Section
+ */
+const formatEmployee360Section = (message, context, history = []) => {
+  const adv = context.teamWorkloadAdvisor;
+  if (!adv) {
+    return null;
+  }
+  const allMembers = adv.allMembersWorkload || [];
+  const targetMember = resolveContextualEntity(
+    message,
+    history,
+    allMembers,
+    (m) => m.userName
+  );
+  if (!targetMember) return null;
+
+  const leaveStatus = targetMember.hasApprovedLeaveNext2Days
+    ? `❌ Đang có lịch nghỉ phép đã duyệt (${(targetMember.upcomingLeaves || [])
+        .map((l) => `${l.startDate} → ${l.endDate}`)
+        .join(', ')})`
+    : targetMember.hasPendingLeaveNext2Days
+      ? '⏳ Có đơn xin nghỉ phép đang chờ duyệt trong 2 ngày tới'
+      : '✅ Đang làm việc bình thường (Không có lịch nghỉ phép trong 2 ngày tới)';
+
+  const ratingLabel = targetMember.isUnproven
+    ? '⚠️ Nhân sự chưa có lịch sử hoàn thành task (0%) — Cần kèm cặp thêm'
+    : targetMember.onTimeRate >= 85 && targetMember.completionRate >= 70
+      ? '🌟 Nhân sự Chủ lực / Hiệu suất Cao (Đáng tin cậy cho task Gấp & Hard)'
+      : '✅ Nhân sự Đạt yêu cầu';
+
+  return (
+    `👤 **Hồ sơ Hiệu suất 360° Nhân sự: ${targetMember.userName}** *(Team: **${targetMember.teamName || adv.teamName}**)*:\n\n` +
+    `• **Đánh giá năng lực**: ${ratingLabel}\n` +
+    `• **Tỷ lệ hoàn thành công việc**: **${targetMember.completionRate ?? 0}%** (Đã xong **${targetMember.completedTasks ?? 0}/${targetMember.totalTasks ?? 0} task**${
+      targetMember.completedHardTasks ? `, trong đó có **${targetMember.completedHardTasks} task độ khó Hard**` : ''
+    })\n` +
+    `• **Tỷ lệ hoàn thành đúng hạn (On-Time Rate)**: **${targetMember.onTimeRate ?? 0}%**\n` +
+    `• **Khối lượng công việc hiện tại**: **${targetMember.inProgressTasks} đang làm (\`in_progress\`)**, **${targetMember.todoTasks} chờ làm (\`todo\`)**, **${targetMember.awaitingReviewTasks || 0} chờ duyệt (\`in_review\`)**, **${targetMember.overdueTasks} quá hạn**\n` +
+    `• **Trạng thái làm việc / Nghỉ phép**: ${leaveStatus}`
+  );
+};
+
+/**
+ * Format Overdue & 48h Due-Soon Risk Radar Section
+ */
+const formatOverdueRiskRadarSection = (context) => {
+  const pt = context.personalTasks;
+  const overdueTasks = (pt.openTasksList || []).filter((t) => t.isOverdue);
+  const dueSoonTasks = (pt.openTasksList || []).filter((t) => t.isDueWithin48h);
+
+  const overdueLines =
+    overdueTasks.length > 0
+      ? overdueTasks
+          .map(
+            (t, i) =>
+              `  ${i + 1}. 🚨 **[${t.priority.toUpperCase()}] ${t.title}** — Hạn chót: **${t.dueDate}** | Tiến độ: **${t.progress}%** (Subtasks: ${t.subTasksSummary})`
+          )
+          .join('\n')
+      : '  - ✅ Bạn không có công việc cá nhân nào bị quá hạn.';
+
+  const dueSoonLines =
+    dueSoonTasks.length > 0
+      ? dueSoonTasks
+          .map(
+            (t, i) =>
+              `  ${i + 1}. ⏰ **[${t.priority.toUpperCase()}] ${t.title}** — Hạn chót: **${t.dueDate}** | Tiến độ: **${t.progress}%**`
+          )
+          .join('\n')
+      : '  - ✅ Không có công việc nào sắp hết hạn trong 48 giờ tới.';
+
+  let teamOverdueSummary = '';
+  if (context.teamWorkloadAdvisor) {
+    const teamsList = context.teamWorkloadAdvisor.teamsWorkload || [context.teamWorkloadAdvisor];
+    const overloadedMembers = teamsList
+      .flatMap((tw) =>
+        (tw.allMembersWorkload || [])
+          .filter((m) => m.overdueTasks > 0)
+          .map((m) => `  - **${m.userName}** (${tw.teamName}): đang có **${m.overdueTasks} task quá hạn**`)
+      );
+    if (overloadedMembers.length > 0) {
+      teamOverdueSummary =
+        `\n\n🏢 **Cảnh báo Quá hạn trong các Team bạn quản lý**:\n` +
+        overloadedMembers.join('\n');
+    }
+  }
+
+  return (
+    `🚨 **Radar Cảnh báo Công việc Quá hạn & Sắp đến hạn (48h tới)**:\n\n` +
+    `**1. Công việc ĐÃ QUÁ HẠN (${overdueTasks.length} task):**\n${overdueLines}\n\n` +
+    `**2. Công việc SẮP ĐẾN HẠN trong 48 giờ tới (${dueSoonTasks.length} task):**\n${dueSoonLines}` +
+    teamOverdueSummary
+  );
+};
+
+/**
+ * Format Dependency & Blocker Bottleneck Section
+ */
+const formatDependencyBottleneckSection = (context) => {
+  const blockedTasks = (context.personalTasks?.openTasksList || []).filter((t) => t.isBlocked);
+  if (blockedTasks.length === 0) {
+    return (
+      `⛓️ **Phân tích Điểm nghẽn Phụ thuộc (Dependencies & Blockers)**:\n` +
+      `• ✅ Hiện tại bạn **không có công việc nào bị chặn (blocked)** bởi các task phụ thuộc. Tất cả ${context.personalTasks.totalOpen} công việc đang mở của bạn đều có thể triển khai bình thường!`
+    );
+  }
+
+  const lines = blockedTasks
+    .map(
+      (t, idx) =>
+        `${idx + 1}. ⛔ **${t.title}** *(Trạng thái: \`${t.status}\`, Ưu tiên: ${t.priority.toUpperCase()}, Hạn: ${t.dueDate || 'N/A'})*\n` +
+        `   - **Đang phải chờ hoàn thành**: **${t.blockedByTitles.join(', ')}**\n` +
+        `   - *Hướng xử lý*: Cần đôn đốc hoàn tất và nghiệm thu (\`done\`) task tiền đề trên trước khi có thể chốt hoàn thành task này.`
+    )
+    .join('\n');
+
+  return (
+    `⛓️ **Phân tích Điểm nghẽn Phụ thuộc (Dependency Bottlenecks — ${blockedTasks.length} task bị chặn)**:\n\n` +
+    `${lines}`
+  );
+};
+
+/**
+ * Format Time Tracking & Estimation Variance Section
+ */
+const formatTimeTrackingSection = (context) => {
+  const pt = context.personalTasks;
+  const totalMin = pt.totalLoggedMinutes ?? 0;
+  const hours = Math.floor(totalMin / 60);
+  const mins = totalMin % 60;
+  const overList = pt.overEstimateTasks || [];
+
+  const overLines =
+    overList.length > 0
+      ? overList
+          .map(
+            (t) =>
+              `  - ⚠️ **${t.title}**: Đã làm **${t.actualMinutes} phút** / Dự kiến **${t.estimatedMinutes} phút** *(Vượt +${
+                t.actualMinutes - t.estimatedMinutes
+              } phút)*`
+          )
+          .join('\n')
+      : '  - ✅ Không có công việc nào bị vượt quá thời gian dự kiến (`estimatedMinutes`).';
+
+  const openTaskTimeLines = (pt.openTasksList || [])
+    .slice(0, 6)
+    .map(
+      (t) =>
+        `  - **${t.title}**: Đã log **${t.actualMinutes || 0} phút** / Ước lượng: **${
+          t.estimatedMinutes != null ? `${t.estimatedMinutes} phút` : 'Chưa đặt'
+        }** (Tiến độ: ${t.progress}%)`
+    )
+    .join('\n');
+
+  return (
+    `⏱️ **Thống kê Thời gian Làm việc (Log Time) & Đối chiếu Ước lượng**:\n\n` +
+    `• **Tổng thời gian bạn đã ghi nhận trên các Task**: **${totalMin} phút** (~ **${hours} giờ ${mins} phút**)\n` +
+    `• **Chi tiết thời gian trên các Task đang mở**:\n${openTaskTimeLines || '  - Chưa có task đang mở.'}\n` +
+    `• **Cảnh báo vượt định mức ước lượng (${overList.length} task)**:\n${overLines}`
+  );
+};
+
+/**
+ * Format Team Leave Calendar (Next 14 Days)
+ */
+const formatTeamLeaveCalendarSection = (context) => {
+  const adv = context.teamWorkloadAdvisor;
+  if (!adv) {
+    return 'Tính năng **Lịch Nghỉ phép Toàn Team** dành cho **Team Lead** và **HR Manager**. Nhân viên có thể xem quỹ phép cá nhân của mình.';
+  }
+
+  const teamsList = adv.teamsWorkload || [adv];
+  const leaveEntries = [];
+
+  for (const tw of teamsList) {
+    for (const m of tw.allMembersWorkload || []) {
+      for (const lv of m.upcomingLeaves || []) {
+        leaveEntries.push({
+          userName: m.userName,
+          teamName: tw.teamName,
+          type: lv.type,
+          status: lv.status,
+          startDate: lv.startDate,
+          endDate: lv.endDate,
+          numberOfDays: lv.numberOfDays
+        });
+      }
+    }
+  }
+
+  if (leaveEntries.length === 0) {
+    return (
+      `📅 **Lịch Nghỉ phép của các Team trong 14 Ngày tới**:\n` +
+      `• ✅ Hiện tại **100% quân số** của cả ${teamsList.length} Team (${teamsList
+        .map((t) => t.teamName)
+        .join(', ')}) đều đi làm đầy đủ, không có lịch nghỉ phép nào trong 2 tuần tới.`
+    );
+  }
+
+  const lines = leaveEntries
+    .map(
+      (e, idx) =>
+        `${idx + 1}. 🌴 **${e.userName}** *(Team ${e.teamName})*: Nghỉ \`${e.type}\` từ **${e.startDate}** đến **${e.endDate}** (${e.numberOfDays} ngày) — Trạng thái: **\`${e.status}\`**`
+    )
+    .join('\n');
+
+  return (
+    `📅 **Lịch Nghỉ phép của các Team trong 14 Ngày tới (${leaveEntries.length} lượt nghỉ)**:\n\n` +
+    `${lines}`
+  );
+};
+
+/**
+ * Format Daily Executive Briefing & Capabilities Overview
+ */
+const formatDailyBriefingSection = (context) => {
+  const u = context.user;
+  const pt = context.personalTasks;
+  const lv = context.personalLeaves;
+  const att = context.personalAttendance;
+  const app = context.pendingApprovals;
+  const adv = context.teamWorkloadAdvisor;
+
+  const todayCheckIn = att.today
+    ? `Đã check-in lúc ${new Date(att.today.clockIn).toTimeString().slice(0, 5)} (${
+        att.today.status === 'late' ? 'Đi muộn' : 'Đúng giờ'
+      })`
+    : 'Chưa check-in hôm nay';
+
+  const topTask = pt.topPriorityTasks?.[0];
+  const topTaskLine = topTask
+    ? `Ưu tiên số 1 hôm nay: **"${topTask.title}"** (Mức độ: ${topTask.priority.toUpperCase()}, Tiến độ: ${topTask.progress}%, Hạn: ${topTask.dueDate || 'N/A'})`
+    : 'Không có task nào đang tồn đọng';
+
+  let managerBlock = '';
+  if (app || adv) {
+    const teamsCount = adv?.teamsWorkload?.length || (adv ? 1 : 0);
+    managerBlock =
+      `\n\n👔 **Tóm tắt Dành riêng cho Quản lý (${u.role.toUpperCase()})**:\n` +
+      `• **Số Team đang quản lý**: **${teamsCount} Team** (${(adv?.managedTeamNames || [adv?.teamName]).filter(Boolean).join(', ')})\n` +
+      `• **Hộp thư chờ bạn phê duyệt**: **${app?.pendingLeaveCount || 0} đơn xin nghỉ phép** và **${app?.tasksInReviewCount || 0} công việc chờ nghiệm thu (\`in_review\`)**`;
+  }
+
+  return (
+    `☀️ **Bản tin Tóm tắt Nhanh Đầu ngày (Daily Briefing — ${context.todayDate}) của ${u.fullName}**:\n\n` +
+    `• **🕒 Chấm công hôm nay**: ${todayCheckIn} *(Tháng ${att.monthLabel}: Có mặt ${
+      att.monthStats.presentDays + att.monthStats.lateDays
+    }/${att.monthStats.totalDays} ngày, Đi muộn: ${att.monthStats.lateDays} ngày)*\n` +
+    `• **📌 Công việc cá nhân**: Đang mở **${pt.totalOpen} task** (Quá hạn: **${pt.overdueCount}**, Bị chặn: **${pt.blockedCount}**) | Đã hoàn thành: **${pt.completedCount || 0} task** (Đúng hạn: **${pt.onTimeRate ?? 100}%**)\n` +
+    `  → ${topTaskLine}\n` +
+    `• **🌴 Quỹ phép năm ${lv.year}**: Còn lại **${lv.balance.remaining}/${lv.balance.total} ngày** (Đang chờ duyệt: ${lv.pendingCount} đơn)` +
+    managerBlock
+  );
+};
+
+/**
+ * Composable Multi-Intent & Deep-Entity Local Copilot Engine v3
+ * Combines Supervised ML Intent Prediction (19 Intents) + Explicit Keyword Guards + Multi-Team Data
  */
 const buildLocalAssistantReply = (message, context, history = []) => {
   const norm = normalizeVi(message);
@@ -442,35 +887,88 @@ const buildLocalAssistantReply = (message, context, history = []) => {
     };
   }
 
+  // Predict Top Intents from Trained ML Classifier
+  const mlPredictions = predictIntents(message, 3);
+  const topIntent = mlPredictions[0]?.intent || 'priority_tasks';
+  const topConfidence = mlPredictions[0]?.confidence || 0;
+
   const sections = [];
   let attachedAction = null;
 
-  // 2. Check if asking about Smart Workload Advisor / Team Assignment
+  // Intent A: System SOP & Workflow Guide
+  const isSopQuery =
+    topIntent === 'system_sop_guide' ||
+    norm.includes('tai sao khong the chuyen') ||
+    norm.includes('quy trinh phe duyet') ||
+    norm.includes('quy trinh gui duyet') ||
+    norm.includes('submit for review') ||
+    norm.includes('auto clock');
+
+  if (isSopQuery) {
+    sections.push(buildSystemSopReply(message, context));
+  }
+
+  // Intent B: Cross-Team Performance Comparison
+  const isTeamComparisonQuery =
+    topIntent === 'team_comparison' ||
+    norm.includes('so sanh hieu suat') ||
+    norm.includes('team nao dang lam viec hieu qua') ||
+    norm.includes('xep hang ty le hoan thanh');
+
+  if (isTeamComparisonQuery && context.teamWorkloadAdvisor) {
+    sections.push(formatTeamComparisonSection(context));
+  }
+
+  // Intent C: Employee 360 Lookup
+  const isEmployee360Query =
+    topIntent === 'employee_360_lookup' ||
+    ((norm.includes('nhan vien ') || norm.includes('ban ') || norm.includes('thanh vien ')) &&
+      (norm.includes('hieu suat') || norm.includes('nang suat') || norm.includes('bao nhieu task')));
+
+  if (isEmployee360Query && context.teamWorkloadAdvisor) {
+    const empSection = formatEmployee360Section(message, context, history);
+    if (empSection) sections.push(empSection);
+  }
+
+  // Intent D: Multi-Team or Single-Team Smart Workload Advisor
   const isWorkloadQuery =
+    ['workload_multi_team', 'workload_single_team'].includes(topIntent) ||
     norm.includes('giao cho ai') ||
     norm.includes('nen giao') ||
     norm.includes('dieu phoi') ||
     norm.includes('qua tai') ||
     norm.includes('tai cong viec') ||
     norm.includes('trong team') ||
-    norm.includes('hieu suat team') ||
+    norm.includes('cac team') ||
     (norm.includes('hard') && norm.includes('task'));
 
-  if (isWorkloadQuery) {
-    const wl = formatWorkloadAdvisorSection(context, norm);
+  if (isWorkloadQuery && !isTeamComparisonQuery && !isEmployee360Query) {
+    const wl = formatWorkloadAdvisorSection(context, norm, message);
     sections.push(wl.text);
     if (wl.action) attachedAction = wl.action;
   }
 
-  // 3. Check if asking about Manager Pending Approvals Inbox (Leaves & Tasks in_review)
+  // Intent E: Team Leave Calendar (Next 14 Days)
+  const isTeamLeaveCalendarQuery =
+    topIntent === 'team_leave_calendar' ||
+    norm.includes('2 tuan toi') ||
+    norm.includes('lich nghi phep cua cac thanh vien') ||
+    norm.includes('ai trong team da duoc duyet nghi');
+
+  if (isTeamLeaveCalendarQuery && context.teamWorkloadAdvisor) {
+    sections.push(formatTeamLeaveCalendarSection(context));
+  }
+
+  // Intent F: Manager Pending Approvals Inbox
   const isApprovalsQuery =
+    topIntent === 'manager_approvals_inbox' ||
     norm.includes('cho duyet') ||
     norm.includes('cho toi duyet') ||
     norm.includes('can duyet') ||
-    norm.includes('in_review') ||
-    norm.includes('nghiem thu');
+    norm.includes('hop thu phe duyet') ||
+    norm.includes('cho nghiem thu');
 
-  if (isApprovalsQuery && context.pendingApprovals) {
+  if (isApprovalsQuery && context.pendingApprovals && !isSopQuery) {
     const app = context.pendingApprovals;
     const leaveLines =
       app.pendingLeaveCount > 0
@@ -499,19 +997,52 @@ const buildLocalAssistantReply = (message, context, history = []) => {
     );
   }
 
-  // 4. Check if asking about a SPECIFIC Task (by fuzzy title match or "task đó" coreference)
+  // Intent G: Overdue & 48h Due-Soon Risk Radar
+  const isOverdueRadarQuery =
+    topIntent === 'overdue_risk_radar' ||
+    norm.includes('48 gio') ||
+    norm.includes('48h') ||
+    norm.includes('sap den han') ||
+    norm.includes('sap het han') ||
+    norm.includes('nguy co tre');
+
+  if (isOverdueRadarQuery) {
+    sections.push(formatOverdueRiskRadarSection(context));
+  }
+
+  // Intent H: Dependency Bottlenecks
+  const isDependencyQuery =
+    topIntent === 'dependency_bottleneck' ||
+    norm.includes('bi chan boi') ||
+    norm.includes('diem nghen') ||
+    norm.includes('tasks bi blocked');
+
+  if (isDependencyQuery && !isSopQuery) {
+    sections.push(formatDependencyBottleneckSection(context));
+  }
+
+  // Intent I: Time Tracking & Estimation Variance
+  const isTimeTrackingQuery =
+    topIntent === 'time_tracking_variance' ||
+    norm.includes('log tong cong bao nhieu') ||
+    norm.includes('vuot qua thoi gian du kien') ||
+    norm.includes('estimatedminutes') ||
+    norm.includes('actualminutes');
+
+  if (isTimeTrackingQuery) {
+    sections.push(formatTimeTrackingSection(context));
+  }
+
+  // Intent J: Specific Task & Subtasks Detail (+ Multi-turn Coreference "task đó")
   const isSpecificTaskDetailQuery =
+    topIntent === 'task_detail_subtasks' ||
     norm.includes('subtask') ||
     norm.includes('dau viec') ||
-    norm.includes('bao nhieu phut') ||
-    norm.includes('log bao nhieu') ||
-    norm.includes('tien do task') ||
-    norm.includes('chi tiet task') ||
     norm.includes('task do') ||
     norm.includes('task nay') ||
     norm.includes('viec do');
 
-  if (isSpecificTaskDetailQuery) {
+  if (isSpecificTaskDetailQuery && !isSopQuery) {
     const openTasks = context.personalTasks?.openTasksList || [];
     const targetTask = resolveContextualEntity(message, history, openTasks, (t) => t.title);
     if (targetTask) {
@@ -534,14 +1065,41 @@ const buildLocalAssistantReply = (message, context, history = []) => {
     }
   }
 
-  // 5. Check if asking about Personal Leave Balance
+  // Intent K: Personal Performance & Completed Tasks
+  const isPersonalPerfQuery =
+    topIntent === 'personal_performance' ||
+    norm.includes('hoan thanh duoc bao nhieu task') ||
+    norm.includes('hieu suat lam viec ca nhan') ||
+    norm.includes('nang suat ca nhan');
+
+  if (isPersonalPerfQuery) {
+    const pt = context.personalTasks;
+    const recentDone =
+      (pt.recentCompletedTitles || []).length > 0
+        ? pt.recentCompletedTitles.map((t, i) => `  ${i + 1}. ✅ ${t}`).join('\n')
+        : '  - Chưa ghi nhận task đã hoàn thành.';
+
+    sections.push(
+      `📈 **Báo cáo Hiệu suất & Kết quả Công việc Cá nhân (${context.user.fullName})**:\n` +
+        `• **Tổng số công việc đã hoàn thành (\`done\`)**: **${pt.completedCount ?? 0} task**\n` +
+        `• **Công việc đang mở**: **${pt.totalOpen} task** (Đang làm: ${pt.inProgressCount}, Chờ làm: ${pt.todoCount}, Quá hạn: ${pt.overdueCount})\n` +
+        `• **Tỷ lệ hoàn thành chung (Completion Rate)**: **${pt.completionRate ?? 0}%**\n` +
+        `• **Tỷ lệ hoàn thành đúng hạn (On-Time Rate)**: **${pt.onTimeRate ?? 100}%**\n` +
+        `• **Các công việc vừa hoàn thành gần đây**:\n${recentDone}`
+    );
+  }
+
+  // Intent L: Personal Leave Balance
   const isLeaveQuery =
-    (norm.includes('ngay phep') ||
+    (topIntent === 'personal_leave_balance' ||
+      norm.includes('ngay phep') ||
       norm.includes('phep nam') ||
       norm.includes('con bao nhieu phep') ||
       norm.includes('quy phep') ||
-      (norm.includes('don nghi') && !isApprovalsQuery)) &&
-    !isWorkloadQuery;
+      (norm.includes('don nghi') && !isApprovalsQuery && !isSopQuery)) &&
+    !isWorkloadQuery &&
+    !isTeamLeaveCalendarQuery &&
+    !isSopQuery;
 
   if (isLeaveQuery) {
     const lv = context.personalLeaves;
@@ -565,13 +1123,15 @@ const buildLocalAssistantReply = (message, context, history = []) => {
     );
   }
 
-  // 6. Check if asking about Office GPS Policy
+  // Intent M: Office GPS Policy
   const isGpsQuery =
-    norm.includes('gps') ||
-    norm.includes('ban kinh') ||
-    norm.includes('quy dinh') ||
-    norm.includes('van phong') ||
-    norm.includes('dia chi');
+    (topIntent === 'office_gps_policy' ||
+      norm.includes('gps') ||
+      norm.includes('ban kinh') ||
+      norm.includes('quy dinh cham cong') ||
+      norm.includes('van phong') ||
+      norm.includes('dia chi')) &&
+    !isSopQuery;
 
   if (isGpsQuery) {
     const off = context.officePolicy;
@@ -589,14 +1149,17 @@ const buildLocalAssistantReply = (message, context, history = []) => {
     }
   }
 
-  // 7. Check if asking about Monthly Attendance & Late Days
+  // Intent N: Monthly Attendance Summary
   const isAttendanceQuery =
-    (norm.includes('di muon') ||
+    (topIntent === 'attendance_summary' ||
+      norm.includes('di muon') ||
       norm.includes('du cong') ||
       norm.includes('cham cong') ||
       norm.includes('gio lam') ||
       norm.includes('diem danh')) &&
-    !isGpsQuery;
+    !isGpsQuery &&
+    !isSopQuery &&
+    !isTimeTrackingQuery;
 
   if (isAttendanceQuery) {
     const att = context.personalAttendance;
@@ -623,16 +1186,28 @@ const buildLocalAssistantReply = (message, context, history = []) => {
     );
   }
 
-  // 8. Check if asking about Priority Tasks / Personal Tasks (or default fallback when no section matched)
+  // Intent O: Daily Executive Briefing
+  const isDailyBriefingQuery =
+    topIntent === 'daily_briefing_overview' ||
+    norm.includes('tom tat nhanh') ||
+    norm.includes('bao cao tong quan dau ngay') ||
+    norm.includes('ban co the giup gi') ||
+    norm.includes('gioi thieu cac tinh nang');
+
+  if (isDailyBriefingQuery) {
+    sections.push(formatDailyBriefingSection(context));
+  }
+
+  // Intent P: Priority Tasks (or Default Fallback)
   const isPriorityTaskQuery =
+    topIntent === 'priority_tasks' ||
     norm.includes('uu tien') ||
     norm.includes('task nao truoc') ||
     norm.includes('cong viec cua toi') ||
     norm.includes('task cua toi') ||
-    norm.includes('qua han') ||
     sections.length === 0;
 
-  if (isPriorityTaskQuery && !isWorkloadQuery) {
+  if (isPriorityTaskQuery && !isWorkloadQuery && !isDailyBriefingQuery) {
     const pt = context.personalTasks;
     if (pt.totalOpen === 0) {
       sections.push(
@@ -674,12 +1249,14 @@ const buildLocalAssistantReply = (message, context, history = []) => {
   return {
     reply: sections.join('\n\n---\n\n'),
     suggestedQuestions,
-    proposedAction: attachedAction
+    proposedAction: attachedAction,
+    detectedIntent: { intent: topIntent, confidence: topConfidence }
   };
 };
 
 /**
  * Main entry point for Chat Assistant (/api/ai/assistant)
+ * Combines Trained ML Classifier + Dynamic Few-Shot RAG + Multi-Team Context Digest + Ollama/Gemini
  */
 const generateAssistantReply = async ({ user, message, history = [] }) => {
   const {
@@ -691,9 +1268,21 @@ const generateAssistantReply = async ({ user, message, history = [] }) => {
   const detectedAction = extractActionIntent(message, context, history);
   const localBaseline = buildLocalAssistantReply(message, context, history);
   const multiDomainDigest = buildCompactContextDigest(context);
+  const fewShotExamples = retrieveFewShotExamples(message, 2);
+
+  const fewShotBlock =
+    fewShotExamples.length > 0
+      ? `HƯỚNG DẪN NGỮ CẢNH TƯƠNG ĐỒNG (FEW-SHOT RAG):\n` +
+        fewShotExamples
+          .map(
+            (ex, idx) =>
+              `Mẫu ${idx + 1} [${ex.category}]: Khi hỏi "${ex.sampleQuestion}" -> Quy tắc trả lời: ${ex.idealAnswer}`
+          )
+          .join('\n')
+      : '';
 
   const systemPrompt =
-    `Bạn là Trợ lý ảo Nội bộ AI HR & Task Copilot. Dựa vào TỔNG HỢP DỮ LIỆU MONGODB và PHÂN TÍCH CHUẨN dưới đây của ${context.user.fullName} (role: ${context.user.role}), hãy trả lời câu hỏi của người dùng bằng tiếng Việt chuyên nghiệp, giữ chính xác 100% các con số, tên task và tên nhân sự. Khi gợi ý giao việc gấp/Hard, BẮT BUỘC ưu tiên nhân sự có tỷ lệ hoàn thành và đúng hạn cao (>0%), không đề xuất người có tỷ lệ hoàn thành 0% lên đầu. Trả về JSON đúng mẫu: {"reply":"...","suggestedQuestions":["..."]}.`;
+    `Bạn là Trợ lý ảo Nội bộ AI HR & Task Copilot v3. Dựa vào TỔNG HỢP DỮ LIỆU MONGODB ĐA TEAM và PHÂN TÍCH CHUẨN dưới đây của ${context.user.fullName} (role: ${context.user.role}), hãy trả lời câu hỏi bằng tiếng Việt chuyên nghiệp, giữ chính xác 100% số liệu, tên Team, tên Task và tên Nhân sự. Khi quản lý nhiều Team hỏi giao việc gấp/Hard, BẮT BUỘC liệt kê ứng viên hiệu suất cao nhất của TẤT CẢ các Team đang quản lý (completionRate > 0% và onTimeRate cao), không xếp người tỷ lệ 0% lên đầu. Trả về JSON đúng mẫu: {"reply":"...","suggestedQuestions":["..."]}.`;
 
   const recentHistoryText = (history || [])
     .slice(-4)
@@ -701,7 +1290,8 @@ const generateAssistantReply = async ({ user, message, history = [] }) => {
     .join('\n');
 
   const userPrompt =
-    `TỔNG HỢP DỮ LIỆU MONGODB (6 MẢNG):\n${multiDomainDigest}\n\n` +
+    (fewShotBlock ? `${fewShotBlock}\n\n` : '') +
+    `TỔNG HỢP DỮ LIỆU MONGODB (7 MẢNG ĐA TEAM):\n${multiDomainDigest}\n\n` +
     `PHÂN TÍCH CHUẨN ĐỐI CHIẾU:\n${localBaseline.reply}\n\n` +
     (recentHistoryText ? `LỊCH SỬ HỘI THOẠI GẦN ĐÂY:\n${recentHistoryText}\n\n` : '') +
     `CÂU HỎI CỦA NGƯỜI DÙNG: "${message}"`;
@@ -736,10 +1326,12 @@ const generateAssistantReply = async ({ user, message, history = [] }) => {
     suggestedQuestions: finalSuggestions.slice(0, 4),
     proposedAction: finalAction || null,
     provider: result.provider,
+    detectedIntent: localBaseline.detectedIntent,
     contextSummary: {
       role: context.user.role,
       openTasks: context.personalTasks.totalOpen,
-      remainingLeaveDays: context.personalLeaves.balance.remaining
+      remainingLeaveDays: context.personalLeaves.balance.remaining,
+      managedTeamsCount: context.teamWorkloadAdvisor?.managedTeamsCount || 0
     }
   };
 };

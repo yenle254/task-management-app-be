@@ -37,6 +37,165 @@ const isTaskCompletedOnTime = (task) => {
 };
 
 /**
+ * Enrich a single team's member progress with experience-weighted suitability scoring
+ */
+const buildSingleTeamWorkload = ({
+  team,
+  memberProgress,
+  tasksByMember,
+  leavesByMember,
+  callerUserId
+}) => {
+  const enrichedMembers = memberProgress.map((m) => {
+    const key = String(m.userId);
+    const memberLeaves = leavesByMember.get(key) || [];
+    const rawMemberTasks = tasksByMember.get(key) || [];
+    const doneTasks = rawMemberTasks.filter((t) => t.status === TASK_STATUS.DONE);
+    const completedHardTasks = doneTasks.filter((t) => t.difficulty === 'hard').length;
+
+    let effectiveOnTimeRate = m.onTimeRate || 0;
+    if (m.onTimeEligibleTasks === 0 && doneTasks.length > 0) {
+      const evaluated = doneTasks.map(isTaskCompletedOnTime).filter((v) => v !== null);
+      if (evaluated.length > 0) {
+        effectiveOnTimeRate = Math.round(
+          (evaluated.filter(Boolean).length / evaluated.length) * 100
+        );
+      } else {
+        effectiveOnTimeRate = 100;
+      }
+    }
+
+    const hasApprovedLeaveNext2Days = memberLeaves.some(
+      (l) => l.status === 'approved' && l.overlapsNext2Days
+    );
+    const hasPendingLeaveNext2Days = memberLeaves.some(
+      (l) => l.status !== 'approved' && l.overlapsNext2Days
+    );
+
+    const activeLoad = m.inProgressTasks + m.todoTasks;
+    const isCurrentUser = key === String(callerUserId);
+    const isTeamLeader = team.leaderId && key === String(team.leaderId);
+    const isUnproven = m.completedTasks === 0 || m.completionRate === 0;
+
+    const performanceScore = isUnproven
+      ? 0
+      : 50 +
+        (m.completionRate || 0) * 0.55 +
+        effectiveOnTimeRate * 0.65 +
+        Math.min(m.completedTasks, 10) * 3 +
+        Math.min(completedHardTasks, 5) * 6;
+
+    const workloadPenalty =
+      m.overdueTasks * 38 +
+      m.inProgressTasks * 12 +
+      m.todoTasks * 4 +
+      (hasPendingLeaveNext2Days ? 15 : 0);
+
+    const suitabilityScore =
+      (hasApprovedLeaveNext2Days ? -1000 : 0) -
+      (isCurrentUser && memberProgress.length > 1 ? 250 : 0) +
+      performanceScore -
+      workloadPenalty;
+
+    return {
+      userId: key,
+      userName: m.userName,
+      teamId: String(team._id),
+      teamName: team.name,
+      isCurrentUser,
+      isTeamLeader: Boolean(isTeamLeader),
+      isUnproven,
+      inProgressTasks: m.inProgressTasks,
+      todoTasks: m.todoTasks,
+      awaitingReviewTasks: m.awaitingReviewTasks,
+      overdueTasks: m.overdueTasks,
+      completedTasks: m.completedTasks,
+      completedHardTasks,
+      totalTasks: m.totalTasks,
+      activeLoad,
+      completionRate: m.completionRate,
+      onTimeRate: effectiveOnTimeRate,
+      hasApprovedLeaveNext2Days,
+      hasPendingLeaveNext2Days,
+      upcomingLeaves: memberLeaves,
+      performanceScore: Math.round(performanceScore * 10) / 10,
+      suitabilityScore: Math.round(suitabilityScore * 10) / 10
+    };
+  });
+
+  const availableCandidates = enrichedMembers.filter(
+    (m) =>
+      !m.hasApprovedLeaveNext2Days &&
+      (!m.isCurrentUser || enrichedMembers.length === 1)
+  );
+
+  const provenRecommendees = availableCandidates
+    .filter((m) => !m.isUnproven)
+    .sort((a, b) => {
+      if (b.suitabilityScore !== a.suitabilityScore) {
+        return b.suitabilityScore - a.suitabilityScore;
+      }
+      if (b.onTimeRate !== a.onTimeRate) return b.onTimeRate - a.onTimeRate;
+      return b.completionRate - a.completionRate;
+    });
+
+  const unprovenAvailable = availableCandidates
+    .filter((m) => m.isUnproven)
+    .sort((a, b) => a.activeLoad - b.activeLoad);
+
+  const prioritizedAssignees =
+    provenRecommendees.length > 0
+      ? [...provenRecommendees, ...unprovenAvailable]
+      : unprovenAvailable;
+
+  const sortedAllMembers = [...enrichedMembers].sort(
+    (a, b) => b.suitabilityScore - a.suitabilityScore
+  );
+
+  // Aggregate team-level performance metrics for cross-team comparison
+  const teamTotalTasks = enrichedMembers.reduce((s, m) => s + m.totalTasks, 0);
+  const teamCompletedTasks = enrichedMembers.reduce((s, m) => s + m.completedTasks, 0);
+  const teamOverdueTasks = enrichedMembers.reduce((s, m) => s + m.overdueTasks, 0);
+  const teamActiveTasks = enrichedMembers.reduce((s, m) => s + m.activeLoad, 0);
+  const provenMembersForAvg = enrichedMembers.filter((m) => !m.isUnproven);
+  const teamAvgOnTimeRate =
+    provenMembersForAvg.length > 0
+      ? Math.round(
+          provenMembersForAvg.reduce((s, m) => s + m.onTimeRate, 0) /
+            provenMembersForAvg.length
+        )
+      : 0;
+  const teamCompletionRate =
+    teamTotalTasks > 0 ? Math.round((teamCompletedTasks / teamTotalTasks) * 100) : 0;
+
+  return {
+    teamId: String(team._id),
+    teamName: team.name,
+    totalMembers: enrichedMembers.length,
+    teamMetrics: {
+      totalTasks: teamTotalTasks,
+      completedTasks: teamCompletedTasks,
+      activeTasks: teamActiveTasks,
+      overdueTasks: teamOverdueTasks,
+      completionRate: teamCompletionRate,
+      onTimeRate: teamAvgOnTimeRate
+    },
+    membersOnLeaveNext2Days: enrichedMembers
+      .filter((m) => m.hasApprovedLeaveNext2Days)
+      .map((m) => ({
+        userId: m.userId,
+        userName: m.userName,
+        teamName: team.name,
+        upcomingLeaves: m.upcomingLeaves
+      })),
+    provenRecommendees: provenRecommendees.slice(0, 3),
+    unprovenAvailable: unprovenAvailable.slice(0, 3),
+    recommendedAssignees: prioritizedAssignees.slice(0, 3),
+    allMembersWorkload: sortedAllMembers
+  };
+};
+
+/**
  * Build RBAC-safe real-time context from MongoDB for the authenticated user
  * @param {Object} authUser - req.user from protect middleware
  * @returns {Promise<Object>}
@@ -77,7 +236,7 @@ const buildUserCopilotContext = async (authUser) => {
       assignedTo: userId,
       status: TASK_STATUS.DONE
     })
-      .select('title difficulty priority dueDate completedAt updatedAt status statusHistory actualMinutes')
+      .select('title difficulty priority dueDate completedAt updatedAt status statusHistory actualMinutes estimatedMinutes')
       .sort({ completedAt: -1, updatedAt: -1 })
       .limit(25)
       .lean(),
@@ -115,7 +274,11 @@ const buildUserCopilotContext = async (authUser) => {
     .map((task) => {
       const deps = Array.isArray(task.dependencies) ? task.dependencies : [];
       const unfinishedDeps = deps.filter((d) => d && d.status && d.status !== TASK_STATUS.DONE);
-      const isOverdue = Boolean(task.dueDate && new Date(task.dueDate) < now);
+      const dueObj = task.dueDate ? new Date(task.dueDate) : null;
+      const isOverdue = Boolean(dueObj && dueObj < now);
+      const isDueWithin48h = Boolean(
+        dueObj && dueObj >= now && dueObj <= next2Days
+      );
       const subTasksList = task.subTasks || [];
       const subTasksTotal = subTasksList.length;
       const subTasksDone = subTasksList.filter((st) => st.isCompleted).length;
@@ -131,6 +294,7 @@ const buildUserCopilotContext = async (authUser) => {
         difficulty: task.difficulty || 'medium',
         dueDate: formatDateISO(task.dueDate),
         isOverdue,
+        isDueWithin48h,
         isBlocked: unfinishedDeps.length > 0,
         blockedByTitles: unfinishedDeps.map((d) => d.title),
         progress: task.progress ?? 0,
@@ -168,6 +332,21 @@ const buildUserCopilotContext = async (authUser) => {
       : myCompletedCount > 0
         ? 100
         : 0;
+
+  // Time tracking & estimation variance statistics
+  const totalLoggedMinutes =
+    myOpenTasks.reduce((s, t) => s + (t.actualMinutes || 0), 0) +
+    myCompletedTasksRaw.reduce((s, t) => s + (t.actualMinutes || 0), 0);
+  const totalEstimatedMinutes = myOpenTasks.reduce(
+    (s, t) => s + (t.estimatedMinutes || 0),
+    0
+  );
+  const overEstimateTasks = myOpenTasks.filter(
+    (t) =>
+      t.estimatedMinutes != null &&
+      t.estimatedMinutes > 0 &&
+      t.actualMinutes > t.estimatedMinutes
+  );
 
   const priorityRecommendation = myOpenTasks.filter((t) => !t.isBlocked).slice(0, 3);
 
@@ -239,10 +418,18 @@ const buildUserCopilotContext = async (authUser) => {
       completionRate: myCompletionRate,
       onTimeRate: myOnTimeRate,
       overdueCount: myOpenTasks.filter((t) => t.isOverdue).length,
+      dueSoon48hCount: myOpenTasks.filter((t) => t.isDueWithin48h).length,
       blockedCount: myOpenTasks.filter((t) => t.isBlocked).length,
       inProgressCount: myOpenTasks.filter((t) => t.status === TASK_STATUS.IN_PROGRESS).length,
       todoCount: myOpenTasks.filter((t) => t.status === TASK_STATUS.TODO).length,
       inReviewCount: myOpenTasks.filter((t) => t.status === TASK_STATUS.IN_REVIEW).length,
+      totalLoggedMinutes,
+      totalEstimatedMinutes,
+      overEstimateTasks: overEstimateTasks.map((t) => ({
+        title: t.title,
+        actualMinutes: t.actualMinutes,
+        estimatedMinutes: t.estimatedMinutes
+      })),
       topPriorityTasks: priorityRecommendation,
       openTasksList: myOpenTasks,
       recentCompletedTitles: myCompletedTasksRaw.slice(0, 5).map((t) => t.title)
@@ -251,7 +438,7 @@ const buildUserCopilotContext = async (authUser) => {
     teamWorkloadAdvisor: null
   };
 
-  // RBAC: Team Lead & HR Manager extended context (Smart Workload Advisor + Approvals Inbox)
+  // RBAC: Team Lead & HR Manager Multi-Team Workload Engine + Approvals Inbox
   if ([USER_ROLES.TEAM_LEAD, USER_ROLES.HR_MANAGER].includes(authUser.role)) {
     let managedTeams = [];
     if (authUser.role === USER_ROLES.TEAM_LEAD) {
@@ -260,46 +447,57 @@ const buildUserCopilotContext = async (authUser) => {
         : { leaderId: userId };
       managedTeams = await Team.find(teamQuery).lean();
     } else if (authUser.role === USER_ROLES.HR_MANAGER) {
-      managedTeams = await Team.find().limit(15).lean();
+      managedTeams = await Team.find().limit(20).lean();
     }
 
     if (managedTeams.length > 0) {
-      const primaryTeam =
-        managedTeams.find((t) => String(t.leaderId) === String(userId)) || managedTeams[0];
+      // Order primaryTeam first (leader's own team if applicable), followed by all other managed teams
+      managedTeams.sort((a, b) => {
+        const aIsLead = String(a.leaderId) === String(userId) ? -1 : 0;
+        const bIsLead = String(b.leaderId) === String(userId) ? -1 : 0;
+        return aIsLead - bIsLead;
+      });
+
+      const primaryTeam = managedTeams[0];
       const managedTeamIds = managedTeams.map((t) => t._id);
 
-      const [memberProgress, teamTasksDetailed, pendingLeavesToApprove, tasksAwaitingReview] =
-        await Promise.all([
-          getTeamMemberProgress(primaryTeam),
-          Task.find({
-            teamId: primaryTeam._id,
-            status: { $ne: TASK_STATUS.DELETED }
-          })
-            .select('title status difficulty priority dueDate completedAt updatedAt statusHistory assignedTo')
-            .lean(),
-          Leave.find(
-            authUser.role === USER_ROLES.HR_MANAGER
-              ? { status: { $in: ['pending_hr', 'pending_team_lead'] } }
-              : {
-                  teamSnapshot: { $in: managedTeamIds },
-                  status: 'pending_team_lead'
-                }
-          )
-            .populate('userId', 'profile.fullName email')
-            .select('userId type startDate endDate numberOfDays status reason')
-            .sort({ createdAt: -1 })
-            .limit(10)
-            .lean(),
-          Task.find({
-            teamId: { $in: managedTeamIds },
-            status: TASK_STATUS.IN_REVIEW
-          })
-            .populate('assignedTo', 'profile.fullName email')
-            .select('title priority difficulty dueDate assignedTo review.submittedAt review.note')
-            .sort({ updatedAt: -1 })
-            .limit(10)
-            .lean()
-        ]);
+      // Query member progress for ALL managed teams in parallel!
+      const [
+        allTeamsMemberProgress,
+        allTeamsTasksDetailed,
+        pendingLeavesToApprove,
+        tasksAwaitingReview
+      ] = await Promise.all([
+        Promise.all(managedTeams.map((team) => getTeamMemberProgress(team))),
+        Task.find({
+          teamId: { $in: managedTeamIds },
+          status: { $ne: TASK_STATUS.DELETED }
+        })
+          .select('title teamId status difficulty priority dueDate completedAt updatedAt statusHistory assignedTo')
+          .lean(),
+        Leave.find(
+          authUser.role === USER_ROLES.HR_MANAGER
+            ? { status: { $in: ['pending_hr', 'pending_team_lead'] } }
+            : {
+                teamSnapshot: { $in: managedTeamIds },
+                status: 'pending_team_lead'
+              }
+        )
+          .populate('userId', 'profile.fullName email')
+          .select('userId type startDate endDate numberOfDays status reason')
+          .sort({ createdAt: -1 })
+          .limit(12)
+          .lean(),
+        Task.find({
+          teamId: { $in: managedTeamIds },
+          status: TASK_STATUS.IN_REVIEW
+        })
+          .populate('assignedTo', 'profile.fullName email')
+          .select('title teamId priority difficulty dueDate assignedTo review.submittedAt review.note')
+          .sort({ updatedAt: -1 })
+          .limit(12)
+          .lean()
+      ]);
 
       context.pendingApprovals = {
         pendingLeaveCount: pendingLeavesToApprove.length,
@@ -325,19 +523,16 @@ const buildUserCopilotContext = async (authUser) => {
         }))
       };
 
-      // Build per-member task breakdown for accurate effectiveOnTimeRate & completedHardTasks
-      const tasksByMember = new Map();
-      for (const t of teamTasksDetailed) {
-        for (const assigneeId of t.assignedTo || []) {
-          const key = String(assigneeId);
-          if (!tasksByMember.has(key)) tasksByMember.set(key, []);
-          tasksByMember.get(key).push(t);
+      // Collect unique member IDs across ALL managed teams to fetch upcoming leaves in 1 query
+      const uniqueMemberIdSet = new Set();
+      for (const progList of allTeamsMemberProgress) {
+        for (const m of progList) {
+          uniqueMemberIdSet.add(String(m.userId));
         }
       }
 
-      const memberIds = memberProgress.map((m) => m.userId);
       const upcomingTeamLeaves = await Leave.find({
-        userId: { $in: memberIds },
+        userId: { $in: [...uniqueMemberIdSet] },
         status: { $in: ['approved', 'pending_team_lead', 'pending_hr'] },
         endDate: { $gte: new Date(now.getFullYear(), now.getMonth(), now.getDate()) },
         startDate: { $lte: next14Days }
@@ -361,134 +556,80 @@ const buildUserCopilotContext = async (authUser) => {
         });
       }
 
-      const enrichedMembers = memberProgress.map((m) => {
-        const key = String(m.userId);
-        const memberLeaves = leavesByMember.get(key) || [];
-        const rawMemberTasks = tasksByMember.get(key) || [];
-        const doneTasks = rawMemberTasks.filter((t) => t.status === TASK_STATUS.DONE);
-        const completedHardTasks = doneTasks.filter((t) => t.difficulty === 'hard').length;
-
-        // Calculate fallback on-time rate when statusHistory snapshot wasn't present
-        let effectiveOnTimeRate = m.onTimeRate || 0;
-        if (m.onTimeEligibleTasks === 0 && doneTasks.length > 0) {
-          const evaluated = doneTasks.map(isTaskCompletedOnTime).filter((v) => v !== null);
-          if (evaluated.length > 0) {
-            effectiveOnTimeRate = Math.round(
-              (evaluated.filter(Boolean).length / evaluated.length) * 100
-            );
-          } else {
-            effectiveOnTimeRate = 100;
+      // Build per-team workload analysis for every managed team
+      const teamsWorkload = managedTeams.map((team, idx) => {
+        const teamIdStr = String(team._id);
+        const teamTasks = allTeamsTasksDetailed.filter(
+          (t) => String(t.teamId) === teamIdStr
+        );
+        const tasksByMember = new Map();
+        for (const t of teamTasks) {
+          for (const assigneeId of t.assignedTo || []) {
+            const key = String(assigneeId);
+            if (!tasksByMember.has(key)) tasksByMember.set(key, []);
+            tasksByMember.get(key).push(t);
           }
         }
 
-        const hasApprovedLeaveNext2Days = memberLeaves.some(
-          (l) => l.status === 'approved' && l.overlapsNext2Days
-        );
-        const hasPendingLeaveNext2Days = memberLeaves.some(
-          (l) => l.status !== 'approved' && l.overlapsNext2Days
-        );
-
-        const activeLoad = m.inProgressTasks + m.todoTasks;
-        const isCurrentUser = key === String(userId);
-        const isTeamLeader = primaryTeam.leaderId && key === String(primaryTeam.leaderId);
-        const isUnproven = m.completedTasks === 0 || m.completionRate === 0;
-
-        // Experience-Weighted Performance Score:
-        // Proven performers with high completionRate & effectiveOnTimeRate receive a strong positive baseline (+50..+180)
-        // while 0% unproven accounts receive 0 performance points so they never outrank proven performers!
-        const performanceScore = isUnproven
-          ? 0
-          : 50 +
-            (m.completionRate || 0) * 0.55 +
-            effectiveOnTimeRate * 0.65 +
-            Math.min(m.completedTasks, 10) * 3 +
-            Math.min(completedHardTasks, 5) * 6;
-
-        const workloadPenalty =
-          m.overdueTasks * 38 +
-          m.inProgressTasks * 12 +
-          m.todoTasks * 4 +
-          (hasPendingLeaveNext2Days ? 15 : 0);
-
-        const suitabilityScore =
-          (hasApprovedLeaveNext2Days ? -1000 : 0) -
-          (isCurrentUser && memberProgress.length > 1 ? 250 : 0) +
-          performanceScore -
-          workloadPenalty;
-
-        return {
-          userId: key,
-          userName: m.userName,
-          isCurrentUser,
-          isTeamLeader: Boolean(isTeamLeader),
-          isUnproven,
-          inProgressTasks: m.inProgressTasks,
-          todoTasks: m.todoTasks,
-          awaitingReviewTasks: m.awaitingReviewTasks,
-          overdueTasks: m.overdueTasks,
-          completedTasks: m.completedTasks,
-          completedHardTasks,
-          totalTasks: m.totalTasks,
-          activeLoad,
-          completionRate: m.completionRate,
-          onTimeRate: effectiveOnTimeRate,
-          hasApprovedLeaveNext2Days,
-          hasPendingLeaveNext2Days,
-          upcomingLeaves: memberLeaves,
-          performanceScore: Math.round(performanceScore * 10) / 10,
-          suitabilityScore: Math.round(suitabilityScore * 10) / 10
-        };
+        return buildSingleTeamWorkload({
+          team,
+          memberProgress: allTeamsMemberProgress[idx] || [],
+          tasksByMember,
+          leavesByMember,
+          callerUserId: userId
+        });
       });
 
-      // Available candidates (not on approved leave in next 2 days, and exclude caller if other members exist)
-      const availableCandidates = enrichedMembers.filter(
-        (m) =>
-          !m.hasApprovedLeaveNext2Days &&
-          (!m.isCurrentUser || enrichedMembers.length === 1)
-      );
+      const primaryTeamWorkload = teamsWorkload[0];
 
-      // Tier 1: Proven Performers (completedTasks > 0 && completionRate > 0%), sorted by suitabilityScore descending
-      const provenRecommendees = availableCandidates
-        .filter((m) => !m.isUnproven)
-        .sort((a, b) => {
-          if (b.suitabilityScore !== a.suitabilityScore) {
-            return b.suitabilityScore - a.suitabilityScore;
+      // Aggregate cross-team top proven performers across all managed teams
+      const crossTeamProvenMap = new Map();
+      const crossTeamAllMembersMap = new Map();
+      const crossTeamLeavesMap = new Map();
+
+      for (const tw of teamsWorkload) {
+        for (const m of tw.allMembersWorkload) {
+          if (!crossTeamAllMembersMap.has(m.userId)) {
+            crossTeamAllMembersMap.set(m.userId, m);
           }
-          if (b.onTimeRate !== a.onTimeRate) return b.onTimeRate - a.onTimeRate;
-          return b.completionRate - a.completionRate;
-        });
+        }
+        for (const m of tw.provenRecommendees) {
+          const existing = crossTeamProvenMap.get(m.userId);
+          if (!existing || m.suitabilityScore > existing.suitabilityScore) {
+            crossTeamProvenMap.set(m.userId, m);
+          }
+        }
+        for (const lvMember of tw.membersOnLeaveNext2Days) {
+          if (!crossTeamLeavesMap.has(lvMember.userId)) {
+            crossTeamLeavesMap.set(lvMember.userId, lvMember);
+          }
+        }
+      }
 
-      // Tier 2: Unproven / 0% completion members (kept separate so they don't overshadow high performers)
-      const unprovenAvailable = availableCandidates
-        .filter((m) => m.isUnproven)
-        .sort((a, b) => a.activeLoad - b.activeLoad);
-
-      const prioritizedAssignees =
-        provenRecommendees.length > 0
-          ? [...provenRecommendees, ...unprovenAvailable]
-          : unprovenAvailable;
-
-      const sortedAllMembers = [...enrichedMembers].sort(
+      const crossTeamProvenRecommendees = [...crossTeamProvenMap.values()].sort(
         (a, b) => b.suitabilityScore - a.suitabilityScore
       );
 
       context.teamWorkloadAdvisor = {
-        teamId: String(primaryTeam._id),
-        teamName: primaryTeam.name,
-        managedTeamsCount: managedTeams.length,
-        managedTeamNames: managedTeams.map((t) => t.name),
-        totalMembers: enrichedMembers.length,
-        membersOnLeaveNext2Days: enrichedMembers
-          .filter((m) => m.hasApprovedLeaveNext2Days)
-          .map((m) => ({
-            userId: m.userId,
-            userName: m.userName,
-            upcomingLeaves: m.upcomingLeaves
-          })),
-        provenRecommendees: provenRecommendees.slice(0, 3),
-        unprovenAvailable: unprovenAvailable.slice(0, 3),
-        recommendedAssignees: prioritizedAssignees.slice(0, 3),
-        allMembersWorkload: sortedAllMembers
+        teamId: primaryTeamWorkload.teamId,
+        teamName: primaryTeamWorkload.teamName,
+        managedTeamsCount: teamsWorkload.length,
+        managedTeamNames: teamsWorkload.map((t) => t.teamName),
+        totalMembers: crossTeamAllMembersMap.size,
+        // Multi-team array containing full breakdown per team!
+        teamsWorkload,
+        crossTeamProvenRecommendees: crossTeamProvenRecommendees.slice(0, 5),
+        // Backward-compatible fields on root object
+        membersOnLeaveNext2Days: [...crossTeamLeavesMap.values()],
+        provenRecommendees: primaryTeamWorkload.provenRecommendees,
+        unprovenAvailable: primaryTeamWorkload.unprovenAvailable,
+        recommendedAssignees:
+          crossTeamProvenRecommendees.length > 0
+            ? crossTeamProvenRecommendees.slice(0, 3)
+            : primaryTeamWorkload.recommendedAssignees,
+        allMembersWorkload: [...crossTeamAllMembersMap.values()].sort(
+          (a, b) => b.suitabilityScore - a.suitabilityScore
+        )
       };
     }
   }
@@ -497,8 +638,8 @@ const buildUserCopilotContext = async (authUser) => {
 };
 
 /**
- * Build a multi-domain compact digest (~400-550 tokens) covering all 6 domains
- * so Ollama qwen2.5:3b / Gemini can answer compound and specific entity questions accurately.
+ * Build a multi-domain compact digest (~450-650 tokens) covering all 7 domains & ALL managed teams
+ * so Ollama qwen2.5:3b / Gemini can answer compound, multi-team, and specific entity questions accurately.
  *
  * @param {Object} context
  * @returns {string}
@@ -518,10 +659,10 @@ const buildCompactContextDigest = (context) => {
   );
 
   lines.push(
-    `[2. TASK CÁ NHÂN] Đang mở: ${pt.totalOpen} (Đang làm: ${pt.inProgressCount}, Chờ làm: ${pt.todoCount}, Chờ duyệt: ${pt.inReviewCount}, Quá hạn: ${pt.overdueCount}, Bị chặn: ${pt.blockedCount}) | Đã hoàn thành: ${pt.completedCount} task (Tỷ lệ hoàn thành: ${pt.completionRate}%, Đúng hạn: ${pt.onTimeRate}%)`
+    `[2. TASK CÁ NHÂN] Đang mở: ${pt.totalOpen} (Đang làm: ${pt.inProgressCount}, Chờ làm: ${pt.todoCount}, Chờ duyệt: ${pt.inReviewCount}, Quá hạn: ${pt.overdueCount}, Sắp đến hạn 48h: ${pt.dueSoon48hCount || 0}, Bị chặn: ${pt.blockedCount}) | Đã hoàn thành: ${pt.completedCount} task (Hoàn thành: ${pt.completionRate}%, Đúng hạn: ${pt.onTimeRate}%) | Tổng giờ đã log: ${pt.totalLoggedMinutes || 0} phút`
   );
 
-  for (const t of pt.openTasksList.slice(0, 8)) {
+  for (const t of pt.openTasksList.slice(0, 7)) {
     const subNote =
       t.pendingSubTaskTitles && t.pendingSubTaskTitles.length > 0
         ? ` | Subtasks chưa xong: ${t.pendingSubTaskTitles.slice(0, 3).join('; ')}`
@@ -535,9 +676,6 @@ const buildCompactContextDigest = (context) => {
   lines.push(
     `[3. NGHỈ PHÉP NĂM ${lv.year}] Tổng: ${lv.balance.total}, Đã dùng: ${lv.balance.used}, Còn lại: ${lv.balance.remaining} ngày | Đơn chờ duyệt: ${lv.pendingCount}`
   );
-  for (const r of lv.pendingRequests) {
-    lines.push(`  - Đơn chờ: ${r.type} (${r.startDate} -> ${r.endDate}, ${r.numberOfDays} ngày, status:${r.status}, lý do: ${r.reason})`);
-  }
 
   const s = att.monthStats;
   lines.push(
@@ -556,24 +694,32 @@ const buildCompactContextDigest = (context) => {
     lines.push(
       `[6. HỘP THƯ QUẢN LÝ CHỜ DUYỆT] Đơn nghỉ phép chờ duyệt: ${app.pendingLeaveCount} | Task chờ nghiệm thu (in_review): ${app.tasksInReviewCount}`
     );
-    for (const pl of app.pendingLeaves.slice(0, 4)) {
-      lines.push(`  - Đơn phép chờ duyệt: ${pl.employeeName} xin nghỉ ${pl.type} (${pl.startDate}->${pl.endDate}, ${pl.numberOfDays} ngày)`);
-    }
-    for (const tr of app.tasksInReview.slice(0, 4)) {
-      lines.push(`  - Task chờ duyệt: "${tr.title}" của ${tr.assignees.join(', ')} (Hạn: ${tr.dueDate || 'N/A'})`);
-    }
   }
 
   if (adv) {
+    const teamsList = Array.isArray(adv.teamsWorkload) && adv.teamsWorkload.length > 0
+      ? adv.teamsWorkload
+      : [adv];
+
     lines.push(
-      `[7. ĐIỀU PHỐI & HIỆU SUẤT TEAM ${adv.teamName}] Số thành viên: ${adv.totalMembers}`
+      `[7. ĐIỀU PHỐI & HIỆU SUẤT ĐA TEAM (${teamsList.length} Team đang quản lý)]`
     );
-    for (const m of adv.allMembersWorkload) {
+    for (const tw of teamsList) {
+      const topProven = (tw.provenRecommendees || [])[0];
       lines.push(
-        `  - ${m.userName}: Hoàn thành ${m.completedTasks}/${m.totalTasks} (${m.completionRate}%), Đúng hạn: ${m.onTimeRate}%, Task Hard đã xong: ${m.completedHardTasks || 0} | Đang làm: ${m.inProgressTasks}, Todo: ${m.todoTasks}, Quá hạn: ${m.overdueTasks} | Điểm phù hợp: ${m.suitabilityScore}${
-          m.hasApprovedLeaveNext2Days ? ' [ĐANG NGHỈ PHÉP - LOẠI TRỪ]' : m.isUnproven ? ' [CHƯA CÓ LỊCH SỬ HOÀN THÀNH 0%]' : ' [NHÂN SỰ HIỆU SUẤT CAO]'
+        `  * TEAM "${tw.teamName}" (${tw.totalMembers} thành viên | Hoàn thành: ${tw.teamMetrics?.completionRate ?? 0}%, Đúng hạn: ${tw.teamMetrics?.onTimeRate ?? 0}%, Quá hạn: ${tw.teamMetrics?.overdueTasks ?? 0}) -> Đề xuất số 1: ${
+          topProven
+            ? `${topProven.userName} (Hoàn thành ${topProven.completionRate}%, Đúng hạn ${topProven.onTimeRate}%, Đang làm ${topProven.inProgressTasks})`
+            : 'Chưa có ứng viên hiệu suất cao'
         }`
       );
+      for (const m of (tw.allMembersWorkload || []).slice(0, 5)) {
+        lines.push(
+          `    - ${m.userName} [${tw.teamName}]: Hoàn thành ${m.completedTasks}/${m.totalTasks} (${m.completionRate}%), Đúng hạn: ${m.onTimeRate}% | Đang làm: ${m.inProgressTasks}, Todo: ${m.todoTasks}, Quá hạn: ${m.overdueTasks}${
+            m.hasApprovedLeaveNext2Days ? ' [ĐANG NGHỈ PHÉP]' : m.isUnproven ? ' [CHƯA CÓ LỊCH SỬ 0%]' : ' [HIỆU SUẤT CAO]'
+          }`
+        );
+      }
     }
   }
 
@@ -699,6 +845,7 @@ module.exports = {
   buildUserCopilotContext,
   buildCompactContextDigest,
   buildTaskSummaryContext,
+  buildSingleTeamWorkload,
   isTaskCompletedOnTime,
   formatDateISO
 };
