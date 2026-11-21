@@ -2,21 +2,25 @@ const express = require('express');
 const router = express.Router();
 const asyncHandler = require('../../middleware/async-handler.middleware');
 const { protect, authorize } = require('../../middleware/auth.middleware');
+const { aiLimiter } = require('../../middleware/rate-limit.middleware');
 const { validateRequest } = require('../../middleware/validate-request.middleware');
 const { USER_ROLES } = require('../../utils/constants.utils');
 const {
   assistantChatValidation,
   taskBreakdownValidation,
-  taskSummaryValidation
+  taskSummaryValidation,
+  assistantFeedbackValidation
 } = require('../validators/ai.validators');
 const {
   chatWithAssistant,
   createTaskBreakdown,
-  getTaskSummary
+  getTaskSummary,
+  submitAssistantFeedback
 } = require('../controllers/ai.controller');
 
-// All AI Copilot routes require authentication
+// All AI Copilot routes require authentication and per-user AI rate limiting (Phase 0.3)
 router.use(protect);
+router.use(aiLimiter);
 
 // 1. Personal HR & Task Assistant + Smart Workload Advisor + Chat-to-Action
 router.post(
@@ -43,5 +47,12 @@ router.post(
   asyncHandler(getTaskSummary)
 );
 
-module.exports = router;
+// 4. AI Response Feedback Loop (Phase 2.5)
+router.post(
+  '/feedback',
+  assistantFeedbackValidation,
+  validateRequest,
+  asyncHandler(submitAssistantFeedback)
+);
 
+module.exports = router;

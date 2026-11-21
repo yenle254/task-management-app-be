@@ -1,11 +1,11 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const { trainIntentClassifier } = require('./train-classifier');
-const { predictIntents } = require('../services/ai-knowledge.service');
+const { getTrainedModel, predictIntents } = require('../services/ai-knowledge.service');
 
 /**
- * Independent Benchmark Evaluation Test Suite (48 diverse real-world Vietnamese queries:
- * canonical, diacritic-free, workplace shorthand, multi-team, and SOP queries)
+ * Independent Benchmark & Adversarial Out-of-Domain Evaluation Suite (58 queries:
+ * 48 in-domain queries with typos/no-diacritics/shorthand + 10 Out-of-Domain adversarial queries)
  */
 const BENCHMARK_TEST_SET = [
   // 1. workload_multi_team
@@ -92,14 +92,58 @@ const BENCHMARK_TEST_SET = [
   { query: 'Log giúp tôi 60 phút làm việc cho task Thiết kế Database với ghi chú: hoàn thành bảng Audit', expected: 'action_log_time' },
 
   // 19. action_create_leave
-  { query: 'Tạo đơn xin nghỉ phép ngày mai vì lý do cá nhân', expected: 'action_create_leave' }
+  { query: 'Tạo đơn xin nghỉ phép ngày mai vì lý do cá nhân', expected: 'action_create_leave' },
+
+  // 20. out_of_domain (Phase 1.3: Adversarial & Out-of-Domain Queries)
+  { query: 'Tôi muốn đặt vé máy bay khứ hồi đi Phú Quốc tuần sau', expected: 'out_of_domain', isOOD: true },
+  { query: 'Giá vàng SJC 9999 hôm nay tăng hay giảm bao nhiêu?', expected: 'out_of_domain', isOOD: true },
+  { query: 'Dự báo thời tiết Hà Nội ngày mai có mưa bão không?', expected: 'out_of_domain', isOOD: true },
+  { query: 'Tỷ số trận bóng đá Champions League đêm qua thế nào?', expected: 'out_of_domain', isOOD: true },
+  { query: 'Chỉ giúp tôi công thức nấu phở bò Nam Định ngon nhất', expected: 'out_of_domain', isOOD: true },
+  { query: 'Hãy sáng tác một bài thơ thất ngôn bát cú về mùa xuân', expected: 'out_of_domain', isOOD: true },
+  { query: 'Giá Bitcoin và Ethereum trên sàn Binance hiện tại là bao nhiêu USD?', expected: 'out_of_domain', isOOD: true },
+  { query: 'Xem bói tử vi tuổi Giáp Thân năm nay hợp màu gì?', expected: 'out_of_domain', isOOD: true },
+  { query: 'Chiều nay rạp CGV có chiếu phim hành động nào hay không?', expected: 'out_of_domain', isOOD: true },
+  { query: 'Kể cho tôi nghe một câu chuyện cổ tích Việt Nam', expected: 'out_of_domain', isOOD: true }
 ];
+
+/**
+ * Compute Expected Calibration Error (ECE) over 5 probability bins (Phase 1.4)
+ */
+const computeECE = (detailedResults, numBins = 5) => {
+  const bins = Array.from({ length: numBins }, () => ({ count: 0, confSum: 0, accSum: 0 }));
+  const n = detailedResults.length || 1;
+
+  for (const r of detailedResults) {
+    const conf = Math.min(Math.max(r.confidence || 0, 0), 0.9999);
+    const binIdx = Math.floor(conf * numBins);
+    bins[binIdx].count += 1;
+    bins[binIdx].confSum += conf;
+    bins[binIdx].accSum += r.pass ? 1 : 0;
+  }
+
+  let ece = 0;
+  for (const b of bins) {
+    if (b.count > 0) {
+      const avgConf = b.confSum / b.count;
+      const avgAcc = b.accSum / b.count;
+      ece += (b.count / n) * Math.abs(avgAcc - avgConf);
+    }
+  }
+  return Number(ece.toFixed(4));
+};
 
 const evaluateModelAndWriteReport = () => {
   const trainRes = trainIntentClassifier();
+  // Reload freshly trained weights
+  getTrainedModel(true);
+
   const t0 = performance.now();
 
   let correct = 0;
+  let oodTotal = 0;
+  let oodRejected = 0;
+  let marginSum = 0;
   const perIntent = {};
   const detailedResults = [];
 
@@ -108,13 +152,21 @@ const evaluateModelAndWriteReport = () => {
       perIntent[item.expected] = { tp: 0, fp: 0, fn: 0, total: 0 };
     }
     perIntent[item.expected].total += 1;
+    if (item.isOOD) oodTotal += 1;
   }
 
   for (const item of BENCHMARK_TEST_SET) {
     const preds = predictIntents(item.query, 2);
     const top1 = preds[0]?.intent || 'unknown';
     const conf = preds[0]?.confidence || 0;
+    const margin = preds[0]?.margin || 0;
+    const isAmbiguous = Boolean(preds[0]?.isAmbiguous);
     const isMatch = top1 === item.expected;
+
+    marginSum += margin;
+    if (item.isOOD && top1 === 'out_of_domain') {
+      oodRejected += 1;
+    }
 
     if (isMatch) {
       correct += 1;
@@ -130,6 +182,8 @@ const evaluateModelAndWriteReport = () => {
       expected: item.expected,
       predicted: top1,
       confidence: conf,
+      margin,
+      isAmbiguous,
       pass: isMatch
     });
   }
@@ -137,6 +191,9 @@ const evaluateModelAndWriteReport = () => {
   const totalTimeMs = performance.now() - t0;
   const avgLatencyMs = Number((totalTimeMs / BENCHMARK_TEST_SET.length).toFixed(3));
   const accuracy = Number(((correct / BENCHMARK_TEST_SET.length) * 100).toFixed(2));
+  const oodRejectionRate = Number(((oodRejected / (oodTotal || 1)) * 100).toFixed(2));
+  const avgMargin = Number((marginSum / BENCHMARK_TEST_SET.length).toFixed(3));
+  const ece = computeECE(detailedResults, 5);
 
   const intentRows = [];
   let sumPrecision = 0;
@@ -176,28 +233,29 @@ const evaluateModelAndWriteReport = () => {
     `# Báo cáo Huấn luyện & Đánh giá Thực nghiệm Model AI HR & Task Copilot v3`,
     ``,
     `> **Thời gian huấn luyện**: \`${new Date().toISOString()}\`  `,
-    `> **Kiến trúc Model**: Hybrid Multinomial Naive Bayes + TF-IDF Unigram/Bigram/Trigram Cosine Centroid + Dynamic Few-Shot RAG + Local LLM (\`qwen2.5:3b\`)  `,
+    `> **Kiến trúc Model**: Hybrid Multinomial Naive Bayes + TF-IDF Unigram/Bigram/Trigram Cosine Centroid + Temperature-Scaled Softmax Calibration + OOD Rejection Guard  `,
     `> **File trọng số xuất ra**: \`server/chat_bot/training/trained-intent-model.json\`  `,
-    `> **Tập dữ liệu huấn luyện**: \`server/chat_bot/training/hr-copilot-dataset.jsonl\` (**${trainRes.stats.totalSamples} mẫu huấn luyện**, **${trainRes.stats.intentCount} lớp ngữ cảnh Intent**, **${trainRes.stats.vocabularySize} đặc trưng N-gram**)`,
+    `> **Tập dữ liệu huấn luyện**: \`server/chat_bot/training/hr-copilot-dataset.jsonl\` (**${trainRes.stats.totalSamples} mẫu huấn luyện**, **${trainRes.stats.intentCount} lớp ngữ cảnh Intent (gồm cả \`out_of_domain\`)**, **${trainRes.stats.vocabularySize} đặc trưng N-gram**)`,
     ``,
     `---`,
     ``,
-    `## 1. Tổng hợp Kết quả Kiểm định Thực nghiệm (Benchmark Evaluation)`,
+    `## 1. Tổng hợp Kết quả Kiểm định Thực nghiệm & Adversarial OOD Benchmark`,
     ``,
     `| Chỉ số Đánh giá (Metric) | Giá trị Đạt được | Ghi chú |`,
     `| :--- | :--- | :--- |`,
-    `| **Tổng số mẫu huấn luyện (Training Samples)** | **${trainRes.stats.totalSamples} mẫu** | Đã tăng cường dữ liệu: Có dấu, Không dấu, Viết tắt công sở |`,
+    `| **Tổng số mẫu huấn luyện (Training Samples)** | **${trainRes.stats.totalSamples} mẫu** | Có dấu, Không dấu, Viết tắt công sở & Mẫu OOD |`,
     `| **Kích thước Từ điển Đặc trưng (N-gram Vocab)** | **${trainRes.stats.vocabularySize} cụm từ** | Unigram + Bigram + Trigram có trọng số Smoothed IDF |`,
-    `| **Tập Kiểm định Độc lập (Test Benchmark)** | **${BENCHMARK_TEST_SET.length} câu hỏi** | Bao phủ đủ ${evaluatedIntents.length} nhóm ngữ cảnh nghiệp vụ |`,
+    `| **Tập Kiểm định Độc lập (Test Benchmark)** | **${BENCHMARK_TEST_SET.length} câu hỏi** | 48 câu In-Domain + 10 câu Adversarial Out-of-Domain |`,
     `| **Overall Accuracy (Độ chính xác tổng thể)** | **${accuracy}% (${correct}/${BENCHMARK_TEST_SET.length})** | Phân loại chính xác Top-1 Intent |`,
-    `| **Macro Precision** | **${macroPrecision}%** | Độ chuẩn xác trung bình giữa các lớp |`,
-    `| **Macro Recall** | **${macroRecall}%** | Độ phủ trung bình giữa các lớp |`,
-    `| **Macro F1-Score** | **${macroF1}%** | Trung bình điều hòa Precision & Recall |`,
+    `| **OOD Rejection Rate (Tỷ lệ chặn câu ngoài phạm vi)** | **${oodRejectionRate}% (${oodRejected}/${oodTotal})** | Chặn chính xác câu hỏi thời tiết, giá vàng, bóng đá, thơ... |`,
+    `| **Macro Precision / Recall / F1-Score** | **${macroPrecision}% / ${macroRecall}% / ${macroF1}%** | Đạt độ cân bằng trên toàn bộ ${evaluatedIntents.length} lớp |`,
+    `| **Expected Calibration Error (ECE - 5 bins)** | **${ece}** | Đã hiệu chuẩn xác suất bằng Temperature-Scaled Softmax |`,
+    `| **Khoảng cách Top-1 vs Top-2 trung bình (Avg Margin)** | **${avgMargin}** | Ngưỡng cảnh báo mơ hồ \`isAmbiguous < 0.08\` |`,
     `| **Tốc độ Suy luận Trung bình (Inference Latency)** | **${avgLatencyMs} ms / câu** | Chạy trực tiếp trên CPU Node.js (0 MB GPU) |`,
     ``,
     `---`,
     ``,
-    `## 2. Bảng Đánh giá Precision / Recall / F1-Score theo từng Ngữ cảnh (19 Intents)`,
+    `## 2. Bảng Đánh giá Precision / Recall / F1-Score theo từng Ngữ cảnh (${evaluatedIntents.length} Intents)`,
     ``,
     `| STT | Mã Ngữ cảnh (Intent Class) | Số mẫu Test | Precision (%) | Recall (%) | F1-Score (%) |`,
     `| :-- | :--- | :---: | :---: | :---: | :---: |`,
@@ -210,11 +268,11 @@ const evaluateModelAndWriteReport = () => {
     ``,
     `## 3. Chi tiết Kiểm thử từng Câu hỏi trong Tập Benchmark (${BENCHMARK_TEST_SET.length} câu)`,
     ``,
-    `| # | Câu hỏi Thực tế (Có dấu / Không dấu / Viết tắt) | Nhãn Kỳ vọng | Model Dự đoán | Độ tự tin (Confidence) | Kết quả |`,
-    `| :-: | :--- | :--- | :--- | :---: | :---: |`,
+    `| # | Câu hỏi Thực tế (In-Domain & Adversarial OOD) | Nhãn Kỳ vọng | Model Dự đoán | Confidence | Margin | Kết quả |`,
+    `| :-: | :--- | :--- | :--- | :---: | :---: | :---: |`,
     ...detailedResults.map(
       (d, idx) =>
-        `| ${idx + 1} | ${d.query} | \`${d.expected}\` | \`${d.predicted}\` | ${d.confidence} | ${
+        `| ${idx + 1} | ${d.query} | \`${d.expected}\` | \`${d.predicted}\` | ${d.confidence} | ${d.margin} | ${
           d.pass ? '✅ PASS' : '❌ FAIL'
         } |`
     ),
@@ -225,9 +283,12 @@ const evaluateModelAndWriteReport = () => {
 
   return {
     accuracy,
+    oodRejectionRate,
     macroPrecision,
     macroRecall,
     macroF1,
+    ece,
+    avgMargin,
     avgLatencyMs,
     reportPath,
     trainStats: trainRes.stats
@@ -239,5 +300,4 @@ if (require.main === module) {
   console.log('[Model Evaluation Complete]', JSON.stringify(res, null, 2));
 }
 
-module.exports = { evaluateModelAndWriteReport, BENCHMARK_TEST_SET };
-
+module.exports = { evaluateModelAndWriteReport, BENCHMARK_TEST_SET, computeECE };

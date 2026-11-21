@@ -14,7 +14,7 @@
     "test:ci": "jest --ci --runInBand --coverage",
     "test:docker": "node tests/docker-smoke.cjs",
     "test:unit": "jest tests/unit",
-    "test:integration": "jest tests/integration",
+    "test:integration": "jest tests/integration --runInBand --no-coverage",
     "test:clear": "jest --clearCache"
   },
   "keywords": [
@@ -59,6 +59,7 @@
     "faker": "^6.6.6",
     "jest": "^30.5.2",
     "jest-extended": "^7.0.0",
+    "mongodb-memory-server": "^11.3.0",
     "nodemon": "^3.0.1",
     "socket.io-client": "4.8.1",
     "supertest": "^7.3.1"

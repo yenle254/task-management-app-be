@@ -30,6 +30,7 @@ const asyncHandler = handler => catchAsync(async (req, res, next) => {
   } finally { res.json = json; }
   if (res.statusCode < 400 && res.locals?.auditTaskEvent) audit.record(req, res.locals.auditTaskEvent);
   if (res.statusCode < 400 && res.locals?.taskReviewNotification) await require('../services/task-review-notification.service').notify(res.locals.taskReviewNotification);
+  if (res.statusCode < 400) require('../chat_bot/services/ai-context.service').clearAllContextCache();
   return res.json(body);
 });
 const { protect, authorize } = require('../middleware/auth.middleware');

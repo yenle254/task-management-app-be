@@ -99,6 +99,41 @@ const fileLimiter = rateLimit({
 const refreshLimiter = rateLimit({ windowMs: TIME.RATE_LIMIT_WINDOW_MS, max: 60,
   message: { success: false, error: 'Too many refresh requests. Please try again later.' },
   standardHeaders: true, legacyHeaders: false, skip: () => process.env.NODE_ENV === 'test' });
+
+/**
+ * Per-user AI endpoint rate limiter (Phase 0.3)
+ * - Keyed by authenticated user ID (req.user._id) after protect middleware
+ * - Default: 30 requests per 15 minutes per user (overridable via AI_RATE_LIMIT_MAX / AI_RATE_LIMIT_WINDOW_MS)
+ */
+const createAiLimiter = (overrides = {}) => {
+  const windowMs =
+    overrides.windowMs ||
+    Number(process.env.AI_RATE_LIMIT_WINDOW_MS) ||
+    TIME.RATE_LIMIT_WINDOW_MS;
+
+  return rateLimit({
+    windowMs,
+    max: (req) =>
+      overrides.max ||
+      Number(process.env.AI_RATE_LIMIT_MAX) ||
+      30,
+    keyGenerator: (req) => String(req.user?._id || req.ip || 'anonymous'),
+    message: {
+      success: false,
+      error: 'Too many AI Copilot requests. Please try again later.',
+      retryAfter: Math.ceil(windowMs / 1000)
+    },
+    standardHeaders: true,
+    legacyHeaders: false,
+    validate: false,
+    skip: () =>
+      process.env.NODE_ENV === 'test' &&
+      process.env.ENABLE_AI_RATE_LIMIT_IN_TEST !== 'true'
+  });
+};
+
+const aiLimiter = createAiLimiter();
+
 module.exports = {
   refreshLimiter,
   fileLimiter,
@@ -106,5 +141,7 @@ module.exports = {
   generalLimiter,
   notificationReadLimiter,
   strictLimiter,
-  authLimiter
+  authLimiter,
+  aiLimiter,
+  createAiLimiter
 };

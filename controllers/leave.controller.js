@@ -24,11 +24,19 @@ async function teamScope(user) {
     return { userId: { $in: members.map(member => member._id) } };
 }
 const submitLeave = async (req, res) => {
-    try { res.status(201).json({ success: true, data: await present(await workflow.create(req.user, req.body, req)) }); }
+    try {
+        const created = await workflow.create(req.user, req.body, req);
+        require('../chat_bot/services/ai-context.service').clearAllContextCache();
+        res.status(201).json({ success: true, data: await present(created) });
+    }
     catch (error) { respondError(res, error); }
 };
 const actionHandler = action => async (req, res) => {
-    try { res.json({ success: true, data: await present(await workflow.transition(req.user, req.params.id, action, req.body || {}, req)) }); }
+    try {
+        const updated = await workflow.transition(req.user, req.params.id, action, req.body || {}, req);
+        require('../chat_bot/services/ai-context.service').clearAllContextCache();
+        res.json({ success: true, data: await present(updated) });
+    }
     catch (error) { respondError(res, error); }
 };
 const submitDraft = actionHandler('submit'), editLeave = actionHandler('edit_resubmit');

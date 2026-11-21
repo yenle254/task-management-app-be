@@ -2,6 +2,9 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { extractNGrams, trainIntentClassifier } = require('../training/train-classifier');
 const { normalizeVi } = require('../utils/vietnamese-nlp.utils');
+const { AI_CONFIG } = require('../config/ai.config');
+const { INTENT_MAP } = require('../utils/intent-keywords.config');
+const { SOP_KNOWLEDGE_DOCUMENTS } = require('../config/sop-knowledge.config');
 
 let cachedModel = null;
 
@@ -9,8 +12,8 @@ let cachedModel = null;
  * Load trained intent model weights from disk (or train on-the-fly if missing)
  * @returns {Object}
  */
-const getTrainedModel = () => {
-  if (cachedModel) return cachedModel;
+const getTrainedModel = (forceReload = false) => {
+  if (cachedModel && !forceReload) return cachedModel;
   const modelPath = path.join(__dirname, '..', 'training', 'trained-intent-model.json');
   if (!fs.existsSync(modelPath)) {
     trainIntentClassifier();
@@ -44,7 +47,7 @@ const vectorizeQuery = (message, model) => {
     vec[term] = vec[term] / norm;
   }
 
-  return { feats, vec };
+  return { feats, vec, recognizedTokenCount: Object.keys(vec).length };
 };
 
 /**
@@ -62,16 +65,34 @@ const cosineSimilarity = (vecA, vecB) => {
 };
 
 /**
- * Predict top intents using Hybrid Ensemble (TF-IDF Cosine Centroid + Multinomial Naive Bayes + Structural Anchors)
+ * Phase 1.1, 1.3 & 1.4: Predict top intents using Unified Config Anchors +
+ * Calibrated Temperature-Scaled Softmax Probability Distribution + Margin Check
+ *
  * @param {string} message
  * @param {number} topK
- * @returns {Array<{intent: string, confidence: number}>}
+ * @returns {Array<{intent: string, confidence: number, margin: number, isAmbiguous: boolean, isOutOfDomain: boolean}>}
  */
 const predictIntents = (message = '', topK = 3) => {
   const model = getTrainedModel();
-  const { feats, vec } = vectorizeQuery(message, model);
+  const { feats, vec, recognizedTokenCount } = vectorizeQuery(message, model);
   const norm = normalizeVi(message);
   const intents = Object.keys(model.classPriors);
+
+  // If the query has zero recognized domain tokens and doesn't match any intent keyword, classify as out_of_domain
+  const hasAnyConfigKeyword = Object.values(INTENT_MAP).some((def) =>
+    (def.keywords || []).some((kw) => norm.includes(kw))
+  );
+  if (recognizedTokenCount === 0 && !hasAnyConfigKeyword) {
+    return [
+      {
+        intent: 'out_of_domain',
+        confidence: 0.92,
+        margin: 0.85,
+        isAmbiguous: false,
+        isOutOfDomain: true
+      }
+    ];
+  }
 
   // 1. Compute Naive Bayes log-scores
   const nbLogScores = {};
@@ -89,112 +110,73 @@ const predictIntents = (message = '', topK = 3) => {
     if (score > maxLog) maxLog = score;
   }
 
-  // Softmax with temperature scaling to prevent extreme saturation
-  const temp = 4.5;
-  let sumExp = 0;
+  const nbTemp = 4.5;
+  let sumNbExp = 0;
   const nbProbs = {};
   for (const intent of intents) {
-    const e = Math.exp((nbLogScores[intent] - maxLog) / temp);
+    const e = Math.exp((nbLogScores[intent] - maxLog) / nbTemp);
     nbProbs[intent] = e;
-    sumExp += e;
+    sumNbExp += e;
   }
   for (const intent of intents) {
-    nbProbs[intent] = nbProbs[intent] / (sumExp || 1);
+    nbProbs[intent] = nbProbs[intent] / (sumNbExp || 1);
   }
 
-  // 2. Compute TF-IDF Centroid Cosine Similarity + Structural Domain Anchors
-  const ensembleScores = intents.map((intent) => {
+  // 2. Compute raw logits combining TF-IDF Cosine + Naive Bayes + Single-Config Anchor Boost
+  const rawLogits = {};
+  let maxLogit = -Infinity;
+  for (const intent of intents) {
     const centroid = model.intentCentroids[intent] || {};
     const cos = cosineSimilarity(vec, centroid);
-    let anchorBoost = 0;
+    const def = INTENT_MAP[intent];
+    const anchorBoost =
+      def && typeof def.anchorBoost === 'function' ? def.anchorBoost(norm) : 0;
+    const kwMatches = def
+      ? (def.keywords || []).filter((kw) => norm.includes(kw)).length
+      : 0;
+    const kwBoost = Math.min(kwMatches * 0.08, 0.24);
 
-    if (
-      intent === 'workload_single_team' &&
-      /\bteam\s+(backend|frontend|mobile|qa|hr|marketing|design|devops|core|ai|data|sale)\b/.test(norm) &&
-      !norm.includes('so sanh') &&
-      !norm.includes('team nao')
-    ) {
-      anchorBoost += 0.35;
-    }
-    if (
-      intent === 'workload_multi_team' &&
-      (norm.includes('giao cho ai') || norm.includes('nen giao') || norm.includes('cac team')) &&
-      !/\bteam\s+(backend|frontend|mobile|qa|hr|marketing|design|devops)\b/.test(norm)
-    ) {
-      anchorBoost += 0.28;
-    }
-    if (
-      intent === 'team_comparison' &&
-      (norm.includes('so sanh') || norm.includes('team nao') || norm.includes('xep hang'))
-    ) {
-      anchorBoost += 0.35;
-    }
-    if (
-      intent === 'employee_360_lookup' &&
-      (norm.includes('nhan vien ') || norm.includes('nv ') || norm.includes('ban ') || norm.includes('thanh vien ')) &&
-      (norm.includes('hieu suat') || norm.includes('nang suat') || norm.includes('cong viec') || norm.includes('bao nhieu task'))
-    ) {
-      anchorBoost += 0.32;
-    }
-    if (
-      intent === 'overdue_risk_radar' &&
-      (norm.includes('48') || norm.includes('sap den han') || norm.includes('sap het han') || norm.includes('nguy co tre') || norm.includes('qua han')) &&
-      !norm.includes('team nao')
-    ) {
-      anchorBoost += 0.3;
-    }
-    if (
-      intent === 'dependency_bottleneck' &&
-      (norm.includes('dependencies') || norm.includes('dependency') || norm.includes('bi chan') || norm.includes('blocked') || norm.includes('diem nghen'))
-    ) {
-      anchorBoost += 0.38;
-    }
-    if (
-      intent === 'time_tracking_variance' &&
-      (norm.includes('estimatedminutes') || norm.includes('actualminutes') || norm.includes('vuot qua thoi gian') || norm.includes('log tong cong') || norm.includes('thoi gian uoc tinh'))
-    ) {
-      anchorBoost += 0.35;
-    }
-    if (
-      intent === 'team_leave_calendar' &&
-      (norm.includes('2 tuan toi') || norm.includes('tuan nay') || norm.includes('lich nghi phep cua') || norm.includes('ai xin nghi phep') || norm.includes('ai trong team da duoc duyet nghi'))
-    ) {
-      anchorBoost += 0.35;
-    }
-    if (
-      intent === 'manager_approvals_inbox' &&
-      (norm.includes('cho toi duyet') || norm.includes('hop thu phe duyet') || norm.includes('cho nghiem thu') || norm.includes('can duyet'))
-    ) {
-      anchorBoost += 0.35;
-    }
-    if (
-      intent === 'personal_performance' &&
-      (norm.includes('hoan thanh duoc bao nhieu') || norm.includes('nang suat ca nhan') || norm.includes('hieu suat lam viec ca nhan') || norm.includes('ket qua hoan thanh nhiem vu ca nhan'))
-    ) {
-      anchorBoost += 0.35;
-    }
-    if (
-      intent === 'system_sop_guide' &&
-      (norm.includes('tai sao') || norm.includes('quy trinh') || norm.includes('hoat dong nhu the nao') || norm.includes('auto clock') || norm.includes('submit for review'))
-    ) {
-      anchorBoost += 0.38;
-    }
-    if (
-      intent === 'daily_briefing_overview' &&
-      (norm.includes('tom tat nhanh') || norm.includes('bao cao tong quan dau ngay') || norm.includes('ban co the giup gi') || norm.includes('gioi thieu cac tinh nang') || norm.includes('tong hop nhanh toan bo'))
-    ) {
-      anchorBoost += 0.38;
-    }
+    const logit = cos * 0.65 + nbProbs[intent] * 0.35 + anchorBoost + kwBoost;
+    rawLogits[intent] = logit;
+    if (logit > maxLogit) maxLogit = logit;
+  }
 
-    const rawScore = cos * 0.65 + nbProbs[intent] * 0.35 + anchorBoost;
-    return {
+  // 3. Phase 1.4: Calibrated Temperature-Scaled Softmax across all classes
+  // so confidence is a true probability distribution (sum = 1.0)
+  const calTemp = AI_CONFIG.CALIBRATION_TEMPERATURE || 0.22;
+  let sumCalExp = 0;
+  const calibratedProbs = {};
+  for (const intent of intents) {
+    const e = Math.exp((rawLogits[intent] - maxLogit) / calTemp);
+    calibratedProbs[intent] = e;
+    sumCalExp += e;
+  }
+
+  const ranked = intents
+    .map((intent) => ({
       intent,
-      confidence: Number(Math.min(0.99, rawScore).toFixed(3))
-    };
-  });
+      rawScore: Number(rawLogits[intent].toFixed(4)),
+      confidence: Number((calibratedProbs[intent] / (sumCalExp || 1)).toFixed(3))
+    }))
+    .sort((a, b) => b.confidence - a.confidence);
 
-  ensembleScores.sort((a, b) => b.confidence - a.confidence);
-  return ensembleScores.slice(0, topK);
+  const top1Conf = ranked[0]?.confidence || 0;
+  const top2Conf = ranked[1]?.confidence || 0;
+  const margin = Number((top1Conf - top2Conf).toFixed(3));
+  const isAmbiguous = margin < AI_CONFIG.AMBIGUOUS_MARGIN_THRESHOLD;
+  const isOutOfDomain =
+    ranked[0]?.intent === 'out_of_domain' ||
+    (ranked[0]?.rawScore || 0) < AI_CONFIG.OOD_CONFIDENCE_THRESHOLD;
+
+  return ranked.slice(0, topK).map((item, idx) => ({
+    intent: idx === 0 && isOutOfDomain ? 'out_of_domain' : item.intent,
+    confidence: item.confidence,
+    rawScore: item.rawScore,
+    margin: idx === 0 ? margin : Number((item.confidence - (ranked[idx + 1]?.confidence || 0)).toFixed(3)),
+    isAmbiguous: idx === 0 ? isAmbiguous : false,
+    isOutOfDomain: idx === 0 ? isOutOfDomain : item.intent === 'out_of_domain',
+    runnerUpIntent: idx === 0 ? ranked[1]?.intent || null : null
+  }));
 };
 
 /**
@@ -220,40 +202,22 @@ const retrieveFewShotExamples = (message = '', topK = 2) => {
 };
 
 /**
- * Generate comprehensive System SOP & Workflow Guide answers
+ * Phase 2.3: Retrieve SOP document from externalized SOP_KNOWLEDGE_DOCUMENTS config using keyword & vector scoring
  */
 const buildSystemSopReply = (message, context) => {
   const norm = normalizeVi(message);
-  const off = context.officePolicy;
+  let bestDoc = SOP_KNOWLEDGE_DOCUMENTS[SOP_KNOWLEDGE_DOCUMENTS.length - 1];
+  let bestScore = -1;
 
-  if (norm.includes('done') || norm.includes('in_review') || norm.includes('review') || norm.includes('khoa') || norm.includes('subtask')) {
-    return (
-      `📘 **Hướng dẫn Quy trình Nghiệp vụ Quản lý Công việc (Task Workflow & Review SOP)**:\n\n` +
-      `1. **Tại sao không thể chuyển thẳng Task sang \`Done\`?**\n` +
-      `   - Hệ thống áp dụng cơ chế **Kiểm soát chất lượng (Review Gate)**: Mọi công việc phải được nhân viên bấm **"Submit for Review"** để chuyển sang trạng thái \`in_review\`.\n` +
-      `   - Khi ở \`in_review\`, nội dung Task/Subtasks/Checklists sẽ được **khóa tạm thời (Locked)** để tránh sửa đổi dữ liệu trong lúc Quản lý đang chấm duyệt (chỉ mở phần Bình luận trao đổi).\n` +
-      `   - Sau khi **Team Lead** hoặc **HR Manager** nhấn **"Approve"**, Task mới chính thức chuyển sang \`done\` và ghi nhận thời점 \`completedAt\`.\n` +
-      `2. **Điều kiện bắt buộc để hoàn thành Task**:\n` +
-      `   - Tất cả các **Dependencies (Task tiền đề)** phải ở trạng thái \`done\`.\n` +
-      `   - Các **Subtasks** bên trong được tự động tính phần trăm tiến độ (\`progress = số subtask xong / tổng số subtask * 100%\`).`
-    );
+  for (const doc of SOP_KNOWLEDGE_DOCUMENTS) {
+    const matches = (doc.keywords || []).filter((kw) => norm.includes(kw)).length;
+    if (matches > bestScore) {
+      bestScore = matches;
+      bestDoc = doc;
+    }
   }
 
-  if (norm.includes('phep') || norm.includes('2 cap') || norm.includes('duyet don')) {
-    return (
-      `📘 **Hướng dẫn Quy trình Phê duyệt Nghỉ phép 2 Cấp (Leave Approval Workflow SOP)**:\n\n` +
-      `1. **Bước 1 — Nhân viên tạo đơn**: Có thể lưu nháp (\`draft\`) hoặc gửi duyệt ngay. Hệ thống kiểm tra ngày hợp lệ (tối đa 30 ngày/đơn) và số dư quỹ phép năm (\`leaveBalance\`).\n` +
-      `2. **Bước 2 — Trưởng nhóm duyệt (\`pending_team_lead\`)**: Đơn của nhân viên trong Team sẽ vào hộp thư của Team Lead. Sau khi Team Lead duyệt, đơn chuyển sang bước HR.\n` +
-      `3. **Bước 3 — Quản lý Nhân sự duyệt cuối (\`pending_hr\` → \`approved\`)**: HR Manager phê duyệt bước cuối. Ngay khi \`approved\`, hệ thống tự động trừ số ngày phép vào \`leaveBalance.used\` và cập nhật \`leaveBalance.remaining\` theo cơ chế Atomic Transaction chống trùng lặp.`
-    );
-  }
-
-  return (
-    `📘 **Cẩm nang Quy trình Nghiệp vụ Hệ thống (HR & Task Management SOP)**:\n\n` +
-    `• **Quy trình Công việc (Task Lifecycle)**: \`todo\` → \`in_progress\` (tự động cập nhật % theo Subtasks) → \`in_review\` (Gửi duyệt, khóa chỉnh sửa) → \`done\` (Sau khi Team Lead/HR Approve và không còn Dependency nào chặn).\n` +
-    `• **Quy trình Nghỉ phép 2 Cấp**: Nộp đơn → \`pending_team_lead\` (Team Lead duyệt) → \`pending_hr\` (HR Manager duyệt) → \`approved\` (Tự động khấu trừ quỹ phép năm).\n` +
-    `• **Quy định Chấm công GPS & Auto Clock-out**: Check-in trong bán kính **${off?.radiusMeters || 100}m** tại **${off?.name || 'Văn phòng'}** (Giờ chuẩn **${off?.workingHours?.start || '09:00'} – ${off?.workingHours?.end || '18:00'}**, sau ${off?.workingHours?.start || '09:00'} tính là \`late\`). Nếu quên check-out qua ngày hôm sau, hệ thống tự động **Auto Clock-out ở mốc 18:00**.`
-  );
+  return bestDoc.contentTemplate(context);
 };
 
 module.exports = {
@@ -262,4 +226,3 @@ module.exports = {
   retrieveFewShotExamples,
   buildSystemSopReply
 };
-

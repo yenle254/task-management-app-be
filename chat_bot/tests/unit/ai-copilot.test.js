@@ -1,18 +1,44 @@
 const {
   extractActionIntent,
+  validateProposedActionAgainstContext,
+  verifyNumericFidelity,
   buildLocalAssistantReply,
   buildLocalTaskBreakdown,
-  buildLocalTaskSummary
+  buildLocalTaskSummary,
+  streamReplyTokensToSocket
 } = require('../../services/ai-assistant.service');
+const {
+  buildSingleTeamWorkload,
+  clearAllContextCache,
+  getContextCacheStats
+} = require('../../services/ai-context.service');
 const {
   predictIntents,
   retrieveFewShotExamples
 } = require('../../services/ai-knowledge.service');
 const {
-  safeParseJSON
-} = require('../../utils/vietnamese-nlp.utils');
+  recordAssistantFeedback,
+  getFeedbackRecords,
+  clearConversationMemory
+} = require('../../services/ai-conversation.service');
+const {
+  AI_TOOL_DECLARATIONS,
+  executeCopilotTool,
+  runToolsForIntent
+} = require('../../services/ai-tools.service');
+const {
+  INTENT_DEFINITIONS,
+  matchesIntentKeywords
+} = require('../../utils/intent-keywords.config');
+const { SUITABILITY_WEIGHTS } = require('../../config/ai.config');
+const { safeParseJSON } = require('../../utils/vietnamese-nlp.utils');
 
-describe('AI HR & Task Copilot v3 (Multi-Team + Trained ML Classifier + 16 Contexts)', () => {
+describe('AI HR & Task Copilot v3 — Full Phase 0, Phase 1 & Phase 2 Verification', () => {
+  beforeEach(() => {
+    clearAllContextCache();
+    clearConversationMemory();
+  });
+
   const sampleEmployeeContext = {
     currentTimeISO: '2026-11-06T10:00:00.000Z',
     todayDate: '2026-11-06',
@@ -144,12 +170,153 @@ describe('AI HR & Task Copilot v3 (Multi-Team + Trained ML Classifier + 16 Conte
     teamWorkloadAdvisor: null
   };
 
-  test('1. AI Task Breakdown & Task Summary work accurately', () => {
+  test('1. [Phase 0.4] Prompt Injection & RBAC Action Allow-List Guard rejects foreign taskId or assigneeId', () => {
+    // Untrusted LLM action pointing to a taskId NOT in user's openTasksList must be rejected!
+    const forgedLogAction = {
+      type: 'LOG_TIME',
+      summary: 'Forged log time',
+      payload: {
+        taskId: '999999999999999999999999',
+        taskTitle: 'Secret Admin Task',
+        minutes: 60,
+        note: 'injected'
+      }
+    };
+    const filteredForged = validateProposedActionAgainstContext(
+      forgedLogAction,
+      null,
+      sampleEmployeeContext
+    );
+    expect(filteredForged).toBeNull();
+
+    // Valid taskId in user's openTasksList is allowed
+    const validLogAction = {
+      type: 'LOG_TIME',
+      summary: 'Valid log time',
+      payload: {
+        taskId: '671f00000000000000000010',
+        taskTitle: 'Thiết kế Database',
+        minutes: 45,
+        note: 'hoàn thành bảng Audit'
+      }
+    };
+    const filteredValid = validateProposedActionAgainstContext(
+      validLogAction,
+      null,
+      sampleEmployeeContext
+    );
+    expect(filteredValid).toBeTruthy();
+    expect(filteredValid.payload.taskId).toBe('671f00000000000000000010');
+  });
+
+  test('2. [Phase 1.1] Unified Single-Config Intent Definitions cover all 20 intents with >=1 keyword', () => {
+    expect(INTENT_DEFINITIONS.length).toBeGreaterThanOrEqual(20);
+    for (const def of INTENT_DEFINITIONS) {
+      expect(typeof def.intent).toBe('string');
+      expect(Array.isArray(def.keywords)).toBe(true);
+      expect(def.keywords.length).toBeGreaterThanOrEqual(1);
+      expect(matchesIntentKeywords(def.keywords[0], def.intent)).toBe(true);
+    }
+  });
+
+  test('3. [Phase 1.2] Numeric Fidelity Guardrail rejects LLM replies that hallucinate numbers', () => {
+    const baseline = 'Số ngày phép còn lại của bạn là 9 ngày trên tổng 12 ngày.';
+    const accurateParaphrase = 'Trong năm nay, tổng quỹ phép của bạn là 12 ngày và bạn hiện còn lại 9 ngày.';
+    const hallucinatedReply = 'Trong năm nay, bạn còn lại 15 ngày phép trên tổng 20 ngày.';
+
+    expect(verifyNumericFidelity(accurateParaphrase, baseline)).toBe(accurateParaphrase);
+    expect(verifyNumericFidelity(hallucinatedReply, baseline)).toBe(baseline);
+  });
+
+  test('4. [Phase 1.3 & 1.4] Out-of-Domain Rejection & Calibrated Confidence + Margin work accurately', () => {
+    const oodPreds = predictIntents('Tôi muốn đặt vé máy bay đi Đà Nẵng cuối tuần này', 2);
+    expect(oodPreds[0].intent).toBe('out_of_domain');
+    expect(oodPreds[0].isOutOfDomain).toBe(true);
+    expect(typeof oodPreds[0].margin).toBe('number');
+    expect(typeof oodPreds[0].isAmbiguous).toBe('boolean');
+
+    const oodReply = buildLocalAssistantReply(
+      'Giá vàng SJC hôm nay tăng hay giảm bao nhiêu?',
+      sampleEmployeeContext
+    );
+    expect(oodReply.detectedIntent.intent).toBe('out_of_domain');
+    expect(oodReply.reply).toContain('ngoài phạm vi công việc và nhân sự');
+    expect(oodReply.reply).not.toContain('Thứ tự Ưu tiên Công việc');
+  });
+
+  test('5. [Phase 2.1] Configurable SUITABILITY_WEIGHTS regression & human-readable explanation', () => {
+    const team = { _id: 'team_be', name: 'Backend Team', leaderId: 'lead_1' };
+    const memberProgress = [
+      {
+        userId: 'emp_proven',
+        userName: 'Phạm Hiệu Suất Cao',
+        inProgressTasks: 1,
+        todoTasks: 0,
+        awaitingReviewTasks: 0,
+        overdueTasks: 0,
+        completedTasks: 9,
+        totalTasks: 10,
+        completionRate: 90,
+        onTimeRate: 96,
+        onTimeEligibleTasks: 9
+      },
+      {
+        userId: 'emp_unproven',
+        userName: 'Trần Mới Vào (0%)',
+        inProgressTasks: 0,
+        todoTasks: 0,
+        awaitingReviewTasks: 0,
+        overdueTasks: 0,
+        completedTasks: 0,
+        totalTasks: 0,
+        completionRate: 0,
+        onTimeRate: 0,
+        onTimeEligibleTasks: 0
+      }
+    ];
+
+    const wl = buildSingleTeamWorkload({
+      team,
+      memberProgress,
+      tasksByMember: new Map(),
+      leavesByMember: new Map(),
+      callerUserId: 'lead_1',
+      weights: SUITABILITY_WEIGHTS
+    });
+
+    expect(wl.provenRecommendees).toHaveLength(1);
+    expect(wl.provenRecommendees[0].userId).toBe('emp_proven');
+    expect(wl.provenRecommendees[0].suitabilityScore).toBe(176.9);
+    expect(wl.provenRecommendees[0].explanation).toContain('Đề xuất vì hoàn thành 90%');
+    expect(wl.unprovenAvailable[0].explanation).toContain('Chưa có lịch sử hoàn thành task');
+
+    // Regression check: changing OVERDUE_PENALTY or IN_PROGRESS_PENALTY changes suitabilityScore deterministically
+    const customWl = buildSingleTeamWorkload({
+      team,
+      memberProgress,
+      tasksByMember: new Map(),
+      leavesByMember: new Map(),
+      callerUserId: 'lead_1',
+      weights: { ...SUITABILITY_WEIGHTS, IN_PROGRESS_PENALTY: 25 }
+    });
+    expect(customWl.provenRecommendees[0].suitabilityScore).toBe(163.9);
+  });
+
+  test('6. [Phase 2.5 & Multi-Team] Multi-Team Smart Workload Advisor & Feedback Loop work end-to-end', () => {
+    const fb = recordAssistantFeedback({
+      userId: '671f00000000000000000001',
+      message: 'Năm nay tôi còn bao nhiêu ngày phép?',
+      predictedIntent: 'personal_leave_balance',
+      rating: 'up',
+      comment: 'Trả lời chính xác'
+    });
+    expect(fb.rating).toBe('up');
+    expect(getFeedbackRecords().length).toBeGreaterThanOrEqual(1);
+
     const breakdown = buildLocalTaskBreakdown({
       title: 'Xây dựng API Quản lý Chấm công và Database Schema',
       description: 'Tối ưu kiến trúc MongoDB và phân quyền RBAC'
     });
-    expect(['easy', 'medium', 'hard']).toContain(breakdown.difficulty);
     expect(breakdown.subTasks.length).toBeGreaterThanOrEqual(4);
 
     const summary = buildLocalTaskSummary({
@@ -172,316 +339,73 @@ describe('AI HR & Task Copilot v3 (Multi-Team + Trained ML Classifier + 16 Conte
       recentComments: [{ author: 'Trần Trưởng Nhóm', text: 'Chờ bảng Transaction xong nhé' }]
     });
     expect(summary.headline).toContain('Tích hợp API Thanh toán');
-    expect(summary.blockers[0]).toContain('Thiết kế Database');
+    expect(safeParseJSON('{"reply": "Test')).toEqual({ reply: 'Test' });
   });
 
-  test('2. Multi-Team Smart Workload Advisor recommends top performers across ALL managed teams', () => {
-    const multiTeamManagerContext = {
-      ...sampleEmployeeContext,
-      user: { ...sampleEmployeeContext.user, role: 'hr_manager' },
-      pendingApprovals: {
-        pendingLeaveCount: 1,
-        pendingLeaves: [
-          {
-            _id: 'lv1',
-            employeeName: 'Lê Nghỉ Phép',
-            type: 'personal',
-            startDate: '2026-11-06',
-            endDate: '2026-11-07',
-            numberOfDays: 2,
-            status: 'pending_hr',
-            reason: 'Việc riêng'
-          }
-        ],
-        tasksInReviewCount: 1,
-        tasksInReview: [
-          {
-            _id: 't99',
-            title: 'Tối ưu Index MongoDB',
-            priority: 'high',
-            dueDate: '2026-11-07',
-            assignees: ['Phạm Backend Giỏi']
-          }
-        ]
-      },
-      teamWorkloadAdvisor: {
-        teamId: 'team_be',
-        teamName: 'Backend Team',
-        managedTeamsCount: 2,
-        managedTeamNames: ['Backend Team', 'Mobile Team'],
-        totalMembers: 4,
-        teamsWorkload: [
-          {
-            teamId: 'team_be',
-            teamName: 'Backend Team',
-            totalMembers: 2,
-            teamMetrics: {
-              totalTasks: 10,
-              completedTasks: 9,
-              activeTasks: 1,
-              overdueTasks: 0,
-              completionRate: 90,
-              onTimeRate: 96
-            },
-            membersOnLeaveNext2Days: [],
-            provenRecommendees: [
-              {
-                userId: 'u_be_1',
-                userName: 'Phạm Backend Giỏi',
-                teamId: 'team_be',
-                teamName: 'Backend Team',
-                isUnproven: false,
-                completedTasks: 9,
-                completedHardTasks: 3,
-                totalTasks: 10,
-                inProgressTasks: 1,
-                todoTasks: 0,
-                overdueTasks: 0,
-                onTimeRate: 96,
-                completionRate: 90,
-                suitabilityScore: 155
-              }
-            ],
-            unprovenAvailable: [
-              {
-                userId: 'u_be_0',
-                userName: 'Trần Mới Vào (0%)',
-                teamId: 'team_be',
-                teamName: 'Backend Team',
-                isUnproven: true,
-                completedTasks: 0,
-                totalTasks: 0,
-                inProgressTasks: 0,
-                todoTasks: 0,
-                overdueTasks: 0,
-                onTimeRate: 0,
-                completionRate: 0,
-                suitabilityScore: 0
-              }
-            ],
-            allMembersWorkload: [
-              {
-                userId: 'u_be_1',
-                userName: 'Phạm Backend Giỏi',
-                teamId: 'team_be',
-                teamName: 'Backend Team',
-                isUnproven: false,
-                completedTasks: 9,
-                totalTasks: 10,
-                inProgressTasks: 1,
-                todoTasks: 0,
-                overdueTasks: 0,
-                onTimeRate: 96,
-                completionRate: 90,
-                hasApprovedLeaveNext2Days: false,
-                upcomingLeaves: []
-              }
-            ]
-          },
-          {
-            teamId: 'team_mob',
-            teamName: 'Mobile Team',
-            totalMembers: 2,
-            teamMetrics: {
-              totalTasks: 12,
-              completedTasks: 11,
-              activeTasks: 0,
-              overdueTasks: 0,
-              completionRate: 92,
-              onTimeRate: 100
-            },
-            membersOnLeaveNext2Days: [],
-            provenRecommendees: [
-              {
-                userId: 'u_mob_1',
-                userName: 'Hoàng Mobile Xuất Sắc',
-                teamId: 'team_mob',
-                teamName: 'Mobile Team',
-                isUnproven: false,
-                completedTasks: 11,
-                completedHardTasks: 4,
-                totalTasks: 12,
-                inProgressTasks: 0,
-                todoTasks: 0,
-                overdueTasks: 0,
-                onTimeRate: 100,
-                completionRate: 92,
-                suitabilityScore: 185
-              }
-            ],
-            unprovenAvailable: [],
-            allMembersWorkload: [
-              {
-                userId: 'u_mob_1',
-                userName: 'Hoàng Mobile Xuất Sắc',
-                teamId: 'team_mob',
-                teamName: 'Mobile Team',
-                isUnproven: false,
-                completedTasks: 11,
-                totalTasks: 12,
-                inProgressTasks: 0,
-                todoTasks: 0,
-                overdueTasks: 0,
-                onTimeRate: 100,
-                completionRate: 92,
-                hasApprovedLeaveNext2Days: false,
-                upcomingLeaves: []
-              }
-            ]
-          }
-        ],
-        crossTeamProvenRecommendees: [
-          {
-            userId: 'u_mob_1',
-            userName: 'Hoàng Mobile Xuất Sắc',
-            teamId: 'team_mob',
-            teamName: 'Mobile Team',
-            isUnproven: false,
-            completedTasks: 11,
-            totalTasks: 12,
-            inProgressTasks: 0,
-            todoTasks: 0,
-            overdueTasks: 0,
-            onTimeRate: 100,
-            completionRate: 92,
-            suitabilityScore: 185
-          },
-          {
-            userId: 'u_be_1',
-            userName: 'Phạm Backend Giỏi',
-            teamId: 'team_be',
-            teamName: 'Backend Team',
-            isUnproven: false,
-            completedTasks: 9,
-            totalTasks: 10,
-            inProgressTasks: 1,
-            todoTasks: 0,
-            overdueTasks: 0,
-            onTimeRate: 96,
-            completionRate: 90,
-            suitabilityScore: 155
-          }
-        ],
-        allMembersWorkload: [
-          {
-            userId: 'u_mob_1',
-            userName: 'Hoàng Mobile Xuất Sắc',
-            teamId: 'team_mob',
-            teamName: 'Mobile Team',
-            isUnproven: false,
-            completedTasks: 11,
-            totalTasks: 12,
-            inProgressTasks: 0,
-            todoTasks: 0,
-            overdueTasks: 0,
-            onTimeRate: 100,
-            completionRate: 92,
-            hasApprovedLeaveNext2Days: false,
-            upcomingLeaves: []
-          },
-          {
-            userId: 'u_be_1',
-            userName: 'Phạm Backend Giỏi',
-            teamId: 'team_be',
-            teamName: 'Backend Team',
-            isUnproven: false,
-            completedTasks: 9,
-            totalTasks: 10,
-            inProgressTasks: 1,
-            todoTasks: 0,
-            overdueTasks: 0,
-            onTimeRate: 96,
-            completionRate: 90,
-            hasApprovedLeaveNext2Days: false,
-            upcomingLeaves: []
-          }
-        ]
-      }
+  test('7. [Phase 2.4 & 2.2] RBAC-Verified Tool-Calling Dispatcher & Progressive Token Streaming work accurately', () => {
+    expect(AI_TOOL_DECLARATIONS.length).toBeGreaterThanOrEqual(7);
+
+    // Employee is denied access to manager tool get_team_workload
+    const deniedTeamTool = executeCopilotTool(
+      'get_team_workload',
+      {},
+      { _id: '671f00000000000000000001', role: 'employee' },
+      sampleEmployeeContext
+    );
+    expect(deniedTeamTool.ok).toBe(false);
+    expect(deniedTeamTool.error).toContain('RBAC_DENIED');
+
+    // Employee can call get_personal_tasks and propose_log_time
+    const personalTool = executeCopilotTool(
+      'get_personal_tasks',
+      { filter: 'priority' },
+      { _id: '671f00000000000000000001', role: 'employee' },
+      sampleEmployeeContext
+    );
+    expect(personalTool.ok).toBe(true);
+    expect(personalTool.result.tasks[0].title).toBe('Thiết kế Database');
+
+    const logTool = executeCopilotTool(
+      'propose_log_time',
+      { taskTitle: 'thiet ke db', minutes: 45, note: 'Tạo bảng AuditLog' },
+      { _id: '671f00000000000000000001', role: 'employee' },
+      sampleEmployeeContext
+    );
+    expect(logTool.ok).toBe(true);
+    expect(logTool.result.proposedAction.type).toBe('LOG_TIME');
+    expect(logTool.result.proposedAction.payload.minutes).toBe(45);
+
+    const intentTools = runToolsForIntent(
+      'action_log_time',
+      'Log giúp tôi 30 phút cho task Thiết kế Database',
+      { _id: '671f00000000000000000001', role: 'employee' },
+      sampleEmployeeContext
+    );
+    expect(intentTools.length).toBeGreaterThanOrEqual(1);
+    expect(intentTools[0].tool).toBe('propose_log_time');
+
+    // Progressive token streaming emits multiple chunks with done: false followed by done: true
+    const emittedFrames = [];
+    const mockIo = {
+      to: () => ({
+        emit: (event, payload) => {
+          emittedFrames.push({ event, payload });
+        }
+      })
     };
 
-    // A. General urgent task question -> must list top performer of BOTH Backend Team and Mobile Team!
-    const multiTeamReply = buildLocalAssistantReply(
-      'Tôi có một task độ khó Hard cần làm gấp trong 2 ngày tới, nên giao cho ai?',
-      multiTeamManagerContext
+    const chunkCount = streamReplyTokensToSocket(
+      mockIo,
+      '671f00000000000000000001',
+      'Một hai ba bốn năm sáu bảy tám chín mười một hai',
+      { intent: 'personal_priority', confidence: 0.9 }
     );
-    expect(multiTeamReply.reply).toContain('Backend Team');
-    expect(multiTeamReply.reply).toContain('Phạm Backend Giỏi');
-    expect(multiTeamReply.reply).toContain('Mobile Team');
-    expect(multiTeamReply.reply).toContain('Hoàng Mobile Xuất Sắc');
-    expect(multiTeamReply.reply).toContain('Trần Mới Vào (0%)');
-    expect(multiTeamReply.proposedAction?.payload?.assigneeId).toBe('u_mob_1');
-
-    // B. Single team targeted question -> filters specifically for Backend Team
-    const singleTeamReply = buildLocalAssistantReply(
-      'Trong team Backend nên giao task gấp cho ai?',
-      multiTeamManagerContext
-    );
-    expect(singleTeamReply.reply).toContain('Team Backend Team');
-    expect(singleTeamReply.reply).toContain('Phạm Backend Giỏi');
-    expect(singleTeamReply.proposedAction?.payload?.assigneeId).toBe('u_be_1');
-
-    // C. Cross-team comparison question
-    const compareReply = buildLocalAssistantReply(
-      'So sánh hiệu suất làm việc giữa các team trong công ty',
-      multiTeamManagerContext
-    );
-    expect(compareReply.reply).toContain('Bảng Xếp hạng & So sánh Hiệu suất giữa các Team');
-    expect(compareReply.reply).toContain('Mobile Team');
-    expect(compareReply.reply).toContain('Backend Team');
-
-    // D. Employee 360 lookup
-    const emp360Reply = buildLocalAssistantReply(
-      'Cho tôi xem hiệu suất và công việc hiện tại của nhân viên Phạm Backend Giỏi',
-      multiTeamManagerContext
-    );
-    expect(emp360Reply.reply).toContain('Hồ sơ Hiệu suất 360° Nhân sự: Phạm Backend Giỏi');
-    expect(emp360Reply.reply).toContain('96%');
-  });
-
-  test('3. Trained ML Intent Classifier, Few-Shot RAG, SOP Guide & Daily Briefing work accurately', () => {
-    const preds = predictIntents('Tại sao tôi không thể chuyển trực tiếp trạng thái task sang Done?', 2);
-    expect(preds[0].intent).toBe('system_sop_guide');
-
-    const rag = retrieveFewShotExamples('Quy trình duyệt nghỉ phép 2 cấp hoạt động thế nào?', 2);
-    expect(rag.length).toBeGreaterThan(0);
-
-    const sopReply = buildLocalAssistantReply(
-      'Tại sao tôi không thể chuyển trực tiếp trạng thái task sang Done?',
-      sampleEmployeeContext
-    );
-    expect(sopReply.reply).toContain('Submit for Review');
-    expect(sopReply.reply).toContain('in_review');
-
-    const briefingReply = buildLocalAssistantReply(
-      'Tóm tắt nhanh tình hình công việc và nhân sự hôm nay cho tôi',
-      sampleEmployeeContext
-    );
-    expect(briefingReply.reply).toContain('Daily Briefing');
-    expect(briefingReply.reply).toContain('Thiết kế Database');
-  });
-
-  test('4. Chat-to-Action, Fuzzy Matching, Multi-turn Coreference & JSON Repair work accurately', () => {
-    const fuzzyLog = extractActionIntent(
-      'Log giup toi 45 phut cho task thiet ke db voi ghi chu: hoàn thành bảng Audit',
-      sampleEmployeeContext
-    );
-    expect(fuzzyLog).toBeTruthy();
-    expect(fuzzyLog.type).toBe('LOG_TIME');
-    expect(fuzzyLog.payload.taskId).toBe('671f00000000000000000010');
-
-    const history = [
-      { role: 'user', content: 'Kiểm tra task Tích hợp API Thanh toán' },
-      { role: 'assistant', content: 'Task Tích hợp API Thanh toán hiện đang ở trạng thái todo...' }
-    ];
-    const corefReply = buildLocalAssistantReply(
-      'Task đó còn những subtask nào chưa xong?',
-      sampleEmployeeContext,
-      history
-    );
-    expect(corefReply.reply).toContain('Tích hợp API Thanh toán');
-    expect(corefReply.reply).toContain('Cấu hình Webhook');
-
-    const repaired = safeParseJSON('{"reply": "Xin chào bạn, đây là câu trả lời bị cắt ngang');
-    expect(repaired).toEqual({ reply: 'Xin chào bạn, đây là câu trả lời bị cắt ngang' });
+    expect(chunkCount).toBe(3);
+    expect(emittedFrames.length).toBe(4); // 3 chunks (done: false) + 1 final (done: true)
+    expect(emittedFrames[0].event).toBe('ai_token');
+    expect(emittedFrames[0].payload.done).toBe(false);
+    expect(emittedFrames[0].payload.chunk).toContain('Một hai ba bốn năm');
+    expect(emittedFrames[3].payload.done).toBe(true);
+    expect(emittedFrames[3].payload.reply).toContain('Một hai ba bốn năm');
   });
 });

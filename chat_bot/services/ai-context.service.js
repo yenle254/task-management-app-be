@@ -10,10 +10,68 @@ const { getTodayAttendance, getAttendanceStats } = require('../../services/atten
 const { getTeamMemberProgress } = require('../../services/team-dashboard.service');
 const { canUserAccessTask } = require('../../services/task.service');
 const { TASK_STATUS, USER_ROLES } = require('../../utils/constants.utils');
+const { AI_CONFIG, SUITABILITY_WEIGHTS } = require('../config/ai.config');
 const { formatDateISO } = require('../utils/vietnamese-nlp.utils');
 
 const PRIORITY_WEIGHT = { high: 3, medium: 2, low: 1 };
 const OPEN_STATUSES = [TASK_STATUS.TODO, TASK_STATUS.IN_PROGRESS, TASK_STATUS.IN_REVIEW];
+
+/**
+ * Phase 0.2: Per-User LRU Context Cache with Role-Aware Short TTL (45s employee, 30s manager)
+ */
+const userContextCache = new Map();
+let cacheStats = { hits: 0, misses: 0 };
+
+const getCachedUserContext = (userId) => {
+  const key = String(userId);
+  const entry = userContextCache.get(key);
+  if (!entry) return null;
+  if (Date.now() > entry.exp) {
+    userContextCache.delete(key);
+    return null;
+  }
+  // Refresh LRU order
+  userContextCache.delete(key);
+  userContextCache.set(key, entry);
+  cacheStats.hits += 1;
+  return entry.context;
+};
+
+const setCachedUserContext = (userId, role, context) => {
+  const key = String(userId);
+  const isManager = [USER_ROLES.TEAM_LEAD, USER_ROLES.HR_MANAGER].includes(role);
+  const ttlMs = isManager
+    ? AI_CONFIG.MANAGER_CONTEXT_CACHE_TTL_MS
+    : AI_CONFIG.CONTEXT_CACHE_TTL_MS;
+
+  if (
+    userContextCache.size >= AI_CONFIG.CONTEXT_CACHE_MAX_USERS &&
+    !userContextCache.has(key)
+  ) {
+    const oldestKey = userContextCache.keys().next().value;
+    if (oldestKey) userContextCache.delete(oldestKey);
+  }
+
+  userContextCache.set(key, {
+    context,
+    exp: Date.now() + ttlMs
+  });
+};
+
+const invalidateUserContextCache = (userId) => {
+  if (userId) userContextCache.delete(String(userId));
+};
+
+const clearAllContextCache = () => {
+  userContextCache.clear();
+  cacheStats = { hits: 0, misses: 0 };
+};
+
+const getContextCacheStats = () => ({
+  size: userContextCache.size,
+  hits: cacheStats.hits,
+  misses: cacheStats.misses
+});
 
 /**
  * Determine if a completed task was finished on time using statusHistory OR completedAt/updatedAt fallback
@@ -37,14 +95,16 @@ const isTaskCompletedOnTime = (task) => {
 };
 
 /**
- * Enrich a single team's member progress with experience-weighted suitability scoring
+ * Phase 2.1: Enrich a single team's member progress with configurable experience-weighted
+ * suitability scoring and human-readable explanation.
  */
 const buildSingleTeamWorkload = ({
   team,
   memberProgress,
   tasksByMember,
   leavesByMember,
-  callerUserId
+  callerUserId,
+  weights = SUITABILITY_WEIGHTS
 }) => {
   const enrichedMembers = memberProgress.map((m) => {
     const key = String(m.userId);
@@ -79,23 +139,38 @@ const buildSingleTeamWorkload = ({
 
     const performanceScore = isUnproven
       ? 0
-      : 50 +
-        (m.completionRate || 0) * 0.55 +
-        effectiveOnTimeRate * 0.65 +
-        Math.min(m.completedTasks, 10) * 3 +
-        Math.min(completedHardTasks, 5) * 6;
+      : weights.PROVEN_BASE_SCORE +
+        (m.completionRate || 0) * weights.COMPLETION_RATE_WEIGHT +
+        effectiveOnTimeRate * weights.ON_TIME_RATE_WEIGHT +
+        Math.min(m.completedTasks, weights.COMPLETED_TASK_CAP) *
+          weights.COMPLETED_TASK_BONUS +
+        Math.min(completedHardTasks, weights.HARD_TASK_CAP) * weights.HARD_TASK_BONUS;
 
     const workloadPenalty =
-      m.overdueTasks * 38 +
-      m.inProgressTasks * 12 +
-      m.todoTasks * 4 +
-      (hasPendingLeaveNext2Days ? 15 : 0);
+      m.overdueTasks * weights.OVERDUE_PENALTY +
+      m.inProgressTasks * weights.IN_PROGRESS_PENALTY +
+      m.todoTasks * weights.TODO_PENALTY +
+      (hasPendingLeaveNext2Days ? weights.PENDING_LEAVE_PENALTY : 0);
 
     const suitabilityScore =
-      (hasApprovedLeaveNext2Days ? -1000 : 0) -
-      (isCurrentUser && memberProgress.length > 1 ? 250 : 0) +
+      (hasApprovedLeaveNext2Days ? -weights.APPROVED_LEAVE_PENALTY : 0) -
+      (isCurrentUser && memberProgress.length > 1 ? weights.SELF_CALLER_PENALTY : 0) +
       performanceScore -
       workloadPenalty;
+
+    // Build human-readable explanation for managers (Phase 2.1)
+    let explanation = '';
+    if (hasApprovedLeaveNext2Days) {
+      explanation = `Loại trừ vì đang có lịch nghỉ phép đã duyệt trong 2 ngày tới`;
+    } else if (isUnproven) {
+      explanation = `Chưa có lịch sử hoàn thành task (0/${m.totalTasks || 0} task, 0%) — chỉ nên giao việc phụ hoặc kèm cặp`;
+    } else {
+      explanation =
+        `Đề xuất vì hoàn thành ${m.completionRate}% (${m.completedTasks}/${m.totalTasks} task` +
+        `${completedHardTasks > 0 ? `, gồm ${completedHardTasks} task Hard` : ''}), ` +
+        `đúng hạn ${effectiveOnTimeRate}%, đang làm ${m.inProgressTasks} task, ` +
+        `${m.overdueTasks} quá hạn, không nghỉ phép trong 2 ngày tới`;
+    }
 
     return {
       userId: key,
@@ -119,7 +194,8 @@ const buildSingleTeamWorkload = ({
       hasPendingLeaveNext2Days,
       upcomingLeaves: memberLeaves,
       performanceScore: Math.round(performanceScore * 10) / 10,
-      suitabilityScore: Math.round(suitabilityScore * 10) / 10
+      suitabilityScore: Math.round(suitabilityScore * 10) / 10,
+      explanation
     };
   });
 
@@ -152,7 +228,6 @@ const buildSingleTeamWorkload = ({
     (a, b) => b.suitabilityScore - a.suitabilityScore
   );
 
-  // Aggregate team-level performance metrics for cross-team comparison
   const teamTotalTasks = enrichedMembers.reduce((s, m) => s + m.totalTasks, 0);
   const teamCompletedTasks = enrichedMembers.reduce((s, m) => s + m.completedTasks, 0);
   const teamOverdueTasks = enrichedMembers.reduce((s, m) => s + m.overdueTasks, 0);
@@ -197,11 +272,21 @@ const buildSingleTeamWorkload = ({
 
 /**
  * Build RBAC-safe real-time context from MongoDB for the authenticated user
+ * Includes per-user short-TTL LRU cache (Phase 0.2) and bounded query ceilings (Phase 0.1).
+ *
  * @param {Object} authUser - req.user from protect middleware
+ * @param {Object} options - { forceRefresh?: boolean }
  * @returns {Promise<Object>}
  */
-const buildUserCopilotContext = async (authUser) => {
+const buildUserCopilotContext = async (authUser, options = {}) => {
   const userId = authUser._id;
+
+  if (!options.forceRefresh) {
+    const cached = getCachedUserContext(userId);
+    if (cached) return cached;
+  }
+  cacheStats.misses += 1;
+
   const now = new Date();
   const currentYear = now.getFullYear();
   const startOfMonth = new Date(currentYear, now.getMonth(), 1, 0, 0, 0, 0);
@@ -230,7 +315,7 @@ const buildUserCopilotContext = async (authUser) => {
       .select('title description status priority difficulty dueDate startDate progress estimatedMinutes actualMinutes storyPoints dependencies subTasks checklists tags updatedAt')
       .populate('dependencies', 'title status dueDate')
       .sort({ dueDate: 1, createdAt: -1 })
-      .limit(25)
+      .limit(AI_CONFIG.PERSONAL_TASKS_QUERY_LIMIT)
       .lean(),
     Task.find({
       assignedTo: userId,
@@ -238,7 +323,7 @@ const buildUserCopilotContext = async (authUser) => {
     })
       .select('title difficulty priority dueDate completedAt updatedAt status statusHistory actualMinutes estimatedMinutes')
       .sort({ completedAt: -1, updatedAt: -1 })
-      .limit(25)
+      .limit(AI_CONFIG.PERSONAL_TASKS_QUERY_LIMIT)
       .lean(),
     Leave.find({
       userId,
@@ -258,6 +343,7 @@ const buildUserCopilotContext = async (authUser) => {
     })
       .select('date clockIn workHours status')
       .sort({ date: -1 })
+      .limit(31)
       .lean(),
     Office.findOne({ isActive: true })
       .select('name address location radius workingHours')
@@ -333,7 +419,6 @@ const buildUserCopilotContext = async (authUser) => {
         ? 100
         : 0;
 
-  // Time tracking & estimation variance statistics
   const totalLoggedMinutes =
     myOpenTasks.reduce((s, t) => s + (t.actualMinutes || 0), 0) +
     myCompletedTasksRaw.reduce((s, t) => s + (t.actualMinutes || 0), 0);
@@ -445,23 +530,21 @@ const buildUserCopilotContext = async (authUser) => {
       const teamQuery = authUser.teamId
         ? { $or: [{ leaderId: userId }, { _id: authUser.teamId }] }
         : { leaderId: userId };
-      managedTeams = await Team.find(teamQuery).lean();
+      managedTeams = await Team.find(teamQuery).limit(10).lean();
     } else if (authUser.role === USER_ROLES.HR_MANAGER) {
       managedTeams = await Team.find().limit(20).lean();
     }
 
     if (managedTeams.length > 0) {
-      // Order primaryTeam first (leader's own team if applicable), followed by all other managed teams
       managedTeams.sort((a, b) => {
         const aIsLead = String(a.leaderId) === String(userId) ? -1 : 0;
         const bIsLead = String(b.leaderId) === String(userId) ? -1 : 0;
         return aIsLead - bIsLead;
       });
 
-      const primaryTeam = managedTeams[0];
       const managedTeamIds = managedTeams.map((t) => t._id);
 
-      // Query member progress for ALL managed teams in parallel!
+      // Phase 0.1: Enforce strict ceiling (.limit(AI_CONFIG.TEAM_TASKS_QUERY_LIMIT)) on team tasks query
       const [
         allTeamsMemberProgress,
         allTeamsTasksDetailed,
@@ -474,6 +557,8 @@ const buildUserCopilotContext = async (authUser) => {
           status: { $ne: TASK_STATUS.DELETED }
         })
           .select('title teamId status difficulty priority dueDate completedAt updatedAt statusHistory assignedTo')
+          .sort({ updatedAt: -1 })
+          .limit(AI_CONFIG.TEAM_TASKS_QUERY_LIMIT)
           .lean(),
         Leave.find(
           authUser.role === USER_ROLES.HR_MANAGER
@@ -523,7 +608,6 @@ const buildUserCopilotContext = async (authUser) => {
         }))
       };
 
-      // Collect unique member IDs across ALL managed teams to fetch upcoming leaves in 1 query
       const uniqueMemberIdSet = new Set();
       for (const progList of allTeamsMemberProgress) {
         for (const m of progList) {
@@ -538,6 +622,7 @@ const buildUserCopilotContext = async (authUser) => {
         startDate: { $lte: next14Days }
       })
         .select('userId type startDate endDate numberOfDays status')
+        .limit(100)
         .lean();
 
       const leavesByMember = new Map();
@@ -556,7 +641,6 @@ const buildUserCopilotContext = async (authUser) => {
         });
       }
 
-      // Build per-team workload analysis for every managed team
       const teamsWorkload = managedTeams.map((team, idx) => {
         const teamIdStr = String(team._id);
         const teamTasks = allTeamsTasksDetailed.filter(
@@ -582,7 +666,6 @@ const buildUserCopilotContext = async (authUser) => {
 
       const primaryTeamWorkload = teamsWorkload[0];
 
-      // Aggregate cross-team top proven performers across all managed teams
       const crossTeamProvenMap = new Map();
       const crossTeamAllMembersMap = new Map();
       const crossTeamLeavesMap = new Map();
@@ -616,10 +699,8 @@ const buildUserCopilotContext = async (authUser) => {
         managedTeamsCount: teamsWorkload.length,
         managedTeamNames: teamsWorkload.map((t) => t.teamName),
         totalMembers: crossTeamAllMembersMap.size,
-        // Multi-team array containing full breakdown per team!
         teamsWorkload,
         crossTeamProvenRecommendees: crossTeamProvenRecommendees.slice(0, 5),
-        // Backward-compatible fields on root object
         membersOnLeaveNext2Days: [...crossTeamLeavesMap.values()],
         provenRecommendees: primaryTeamWorkload.provenRecommendees,
         unprovenAvailable: primaryTeamWorkload.unprovenAvailable,
@@ -634,12 +715,26 @@ const buildUserCopilotContext = async (authUser) => {
     }
   }
 
+  // Phase 0.2: Store RBAC-verified context in per-user LRU cache
+  setCachedUserContext(userId, authUser.role, context);
+
   return context;
 };
 
 /**
+ * Sanitize untrusted user-generated strings before embedding into prompt digest (Phase 0.4)
+ */
+const sanitizeDigestField = (val, maxLen = 160) =>
+  String(val ?? '')
+    .replace(/[\u0000-\u001F\u007F]/g, ' ')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .trim()
+    .slice(0, maxLen);
+
+/**
  * Build a multi-domain compact digest (~450-650 tokens) covering all 7 domains & ALL managed teams
- * so Ollama qwen2.5:3b / Gemini can answer compound, multi-team, and specific entity questions accurately.
+ * with Phase 0.4 untrusted text sanitization.
  *
  * @param {Object} context
  * @returns {string}
@@ -655,7 +750,7 @@ const buildCompactContextDigest = (context) => {
 
   const lines = [];
   lines.push(
-    `[1. NGƯỜI DÙNG] ${u.fullName} | Role: ${u.role} | Team: ${u.teamName || 'N/A'} | Hôm nay: ${context.todayDate} (Ngày mai: ${context.tomorrowDate})`
+    `[1. NGƯỜI DÙNG] ${sanitizeDigestField(u.fullName, 80)} | Role: ${u.role} | Team: ${sanitizeDigestField(u.teamName || 'N/A', 60)} | Hôm nay: ${context.todayDate} (Ngày mai: ${context.tomorrowDate})`
   );
 
   lines.push(
@@ -663,13 +758,19 @@ const buildCompactContextDigest = (context) => {
   );
 
   for (const t of pt.openTasksList.slice(0, 7)) {
+    const safeTitle = sanitizeDigestField(t.title, 120);
     const subNote =
       t.pendingSubTaskTitles && t.pendingSubTaskTitles.length > 0
-        ? ` | Subtasks chưa xong: ${t.pendingSubTaskTitles.slice(0, 3).join('; ')}`
+        ? ` | Subtasks chưa xong: ${t.pendingSubTaskTitles
+            .slice(0, 3)
+            .map((s) => sanitizeDigestField(s, 80))
+            .join('; ')}`
         : '';
-    const blockNote = t.isBlocked ? ` | BỊ CHẶN BỞI: ${t.blockedByTitles.join(', ')}` : '';
+    const blockNote = t.isBlocked
+      ? ` | BỊ CHẶN BỞI: ${t.blockedByTitles.map((b) => sanitizeDigestField(b, 80)).join(', ')}`
+      : '';
     lines.push(
-      `  - Task "${t.title}" (ID:${t._id}) [${t.priority.toUpperCase()}/${t.difficulty}] Status:${t.status}, Tiến độ:${t.progress}%, Hạn:${t.dueDate || 'N/A'}${t.isOverdue ? '(QUÁ HẠN)' : ''}, Giờ làm:${t.actualMinutes}/${t.estimatedMinutes || '?'}p, Subtasks:${t.subTasksSummary}${subNote}${blockNote}`
+      `  - Task "${safeTitle}" (ID:${t._id}) [${t.priority.toUpperCase()}/${t.difficulty}] Status:${t.status}, Tiến độ:${t.progress}%, Hạn:${t.dueDate || 'N/A'}${t.isOverdue ? '(QUÁ HẠN)' : ''}, Giờ làm:${t.actualMinutes}/${t.estimatedMinutes || '?'}p, Subtasks:${t.subTasksSummary}${subNote}${blockNote}`
     );
   }
 
@@ -686,7 +787,7 @@ const buildCompactContextDigest = (context) => {
 
   if (off) {
     lines.push(
-      `[5. QUY ĐỊNH GPS VĂN PHÒNG] ${off.name} | Địa chỉ: ${off.address} | Bán kính: ${off.radiusMeters}m | Giờ chuẩn: ${off.workingHours.start}-${off.workingHours.end}`
+      `[5. QUY ĐỊNH GPS VĂN PHÒNG] ${sanitizeDigestField(off.name, 80)} | Địa chỉ: ${sanitizeDigestField(off.address, 140)} | Bán kính: ${off.radiusMeters}m | Giờ chuẩn: ${off.workingHours.start}-${off.workingHours.end}`
     );
   }
 
@@ -697,9 +798,10 @@ const buildCompactContextDigest = (context) => {
   }
 
   if (adv) {
-    const teamsList = Array.isArray(adv.teamsWorkload) && adv.teamsWorkload.length > 0
-      ? adv.teamsWorkload
-      : [adv];
+    const teamsList =
+      Array.isArray(adv.teamsWorkload) && adv.teamsWorkload.length > 0
+        ? adv.teamsWorkload
+        : [adv];
 
     lines.push(
       `[7. ĐIỀU PHỐI & HIỆU SUẤT ĐA TEAM (${teamsList.length} Team đang quản lý)]`
@@ -707,15 +809,15 @@ const buildCompactContextDigest = (context) => {
     for (const tw of teamsList) {
       const topProven = (tw.provenRecommendees || [])[0];
       lines.push(
-        `  * TEAM "${tw.teamName}" (${tw.totalMembers} thành viên | Hoàn thành: ${tw.teamMetrics?.completionRate ?? 0}%, Đúng hạn: ${tw.teamMetrics?.onTimeRate ?? 0}%, Quá hạn: ${tw.teamMetrics?.overdueTasks ?? 0}) -> Đề xuất số 1: ${
+        `  * TEAM "${sanitizeDigestField(tw.teamName, 60)}" (${tw.totalMembers} thành viên | Hoàn thành: ${tw.teamMetrics?.completionRate ?? 0}%, Đúng hạn: ${tw.teamMetrics?.onTimeRate ?? 0}%, Quá hạn: ${tw.teamMetrics?.overdueTasks ?? 0}) -> Đề xuất số 1: ${
           topProven
-            ? `${topProven.userName} (Hoàn thành ${topProven.completionRate}%, Đúng hạn ${topProven.onTimeRate}%, Đang làm ${topProven.inProgressTasks})`
+            ? `${sanitizeDigestField(topProven.userName, 60)} (${topProven.explanation || ''})`
             : 'Chưa có ứng viên hiệu suất cao'
         }`
       );
       for (const m of (tw.allMembersWorkload || []).slice(0, 5)) {
         lines.push(
-          `    - ${m.userName} [${tw.teamName}]: Hoàn thành ${m.completedTasks}/${m.totalTasks} (${m.completionRate}%), Đúng hạn: ${m.onTimeRate}% | Đang làm: ${m.inProgressTasks}, Todo: ${m.todoTasks}, Quá hạn: ${m.overdueTasks}${
+          `    - ${sanitizeDigestField(m.userName, 60)} [${sanitizeDigestField(tw.teamName, 60)}]: Hoàn thành ${m.completedTasks}/${m.totalTasks} (${m.completionRate}%), Đúng hạn: ${m.onTimeRate}% | Đang làm: ${m.inProgressTasks}, Todo: ${m.todoTasks}, Quá hạn: ${m.overdueTasks}${
             m.hasApprovedLeaveNext2Days ? ' [ĐANG NGHỈ PHÉP]' : m.isUnproven ? ' [CHƯA CÓ LỊCH SỬ 0%]' : ' [HIỆU SUẤT CAO]'
           }`
         );
@@ -847,5 +949,9 @@ module.exports = {
   buildTaskSummaryContext,
   buildSingleTeamWorkload,
   isTaskCompletedOnTime,
+  sanitizeDigestField,
+  invalidateUserContextCache,
+  clearAllContextCache,
+  getContextCacheStats,
   formatDateISO
 };

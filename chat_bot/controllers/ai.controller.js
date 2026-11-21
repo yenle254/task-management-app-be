@@ -4,6 +4,7 @@ const {
   summarizeTask
 } = require('../services/ai-assistant.service');
 const { buildTaskSummaryContext } = require('../services/ai-context.service');
+const { recordAssistantFeedback } = require('../services/ai-conversation.service');
 
 /**
  * @desc    Chat with Internal AI HR & Task Copilot (RBAC-scoped context + Chat-to-Action)
@@ -11,12 +12,14 @@ const { buildTaskSummaryContext } = require('../services/ai-context.service');
  * @access  Private (All authenticated roles: employee, team_lead, hr_manager, system_admin)
  */
 const chatWithAssistant = async (req, res) => {
-  const { message, history = [] } = req.body;
+  const { message, history = [], forceRefresh = false } = req.body;
 
   const result = await generateAssistantReply({
     user: req.user,
     message,
-    history
+    history,
+    forceRefresh: Boolean(forceRefresh),
+    io: req.app?.get?.('io') || null
   });
 
   return res.status(200).json({
@@ -68,9 +71,32 @@ const getTaskSummary = async (req, res) => {
   });
 };
 
+/**
+ * @desc    Submit user feedback (thumbs up/down) for model governance & retraining (Phase 2.5)
+ * @route   POST /api/ai/feedback
+ * @access  Private
+ */
+const submitAssistantFeedback = async (req, res) => {
+  const { message, predictedIntent, rating, confirmedAction, comment } = req.body;
+
+  const entry = recordAssistantFeedback({
+    userId: req.user._id,
+    message,
+    predictedIntent,
+    rating,
+    confirmedAction,
+    comment
+  });
+
+  return res.status(201).json({
+    success: true,
+    data: entry
+  });
+};
+
 module.exports = {
   chatWithAssistant,
   createTaskBreakdown,
-  getTaskSummary
+  getTaskSummary,
+  submitAssistantFeedback
 };
-
